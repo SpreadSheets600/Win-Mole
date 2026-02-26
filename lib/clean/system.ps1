@@ -1,216 +1,324 @@
 # WinMole - System Cleanup Module
-# Cleans system-level caches, logs, and temporary files (requires admin)
+# Cleans Windows system files that require administrator access
 
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
-# Import core
+# Prevent multiple sourcing
+if ((Get-Variable -Name 'WINMOLE_CLEAN_SYSTEM_LOADED' -Scope Script -ErrorAction SilentlyContinue) -and $script:WINMOLE_CLEAN_SYSTEM_LOADED) { return }
+$script:WINMOLE_CLEAN_SYSTEM_LOADED = $true
+
+# Import dependencies
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$coreDir = Join-Path (Split-Path -Parent $scriptDir) "core"
-. "$coreDir\common.ps1"
+. "$scriptDir\..\core\base.ps1"
+. "$scriptDir\..\core\log.ps1"
+. "$scriptDir\..\core\file_ops.ps1"
 
 # ============================================================================
-# Windows System Caches
+# System Temp Files
 # ============================================================================
 
-function Clear-SystemCaches {
+function Clear-SystemTempFiles {
     <#
     .SYNOPSIS
-        Clean Windows system-level caches (requires admin)
+        Clean system-level temporary files (requires admin)
     #>
+
     if (-not (Test-IsAdmin)) {
-        Write-Warning "System cleanup requires administrator privileges"
+        Write-Debug "Skipping system temp cleanup - requires admin"
         return
     }
-    
-    Start-Section "System Caches"
-    
-    # Windows Temp
-    $winTemp = "$env:SystemRoot\Temp"
+
+    # Windows Temp folder
+    $winTemp = "$env:WINDIR\Temp"
     if (Test-Path $winTemp) {
-        Clear-DirectoryContents -Path $winTemp -Description "Windows Temp"
+        Remove-OldFiles -Path $winTemp -DaysOld 7 -Description "Windows temp files"
     }
-    
-    # Font cache
-    $fontCache = "$env:SystemRoot\ServiceProfiles\LocalService\AppData\Local\FontCache"
-    if (Test-Path $fontCache) {
-        Remove-OldFiles -Path $fontCache -DaysOld 30 -Description "Font cache"
+
+    # System temp (different from Windows temp)
+    $systemTemp = "$env:SYSTEMROOT\Temp"
+    if ((Test-Path $systemTemp) -and ($systemTemp -ne $winTemp)) {
+        Remove-OldFiles -Path $systemTemp -DaysOld 7 -Description "System temp files"
     }
-    
-    # Windows Installer cache (be careful - only orphaned patches)
-    $installerCache = "$env:SystemRoot\Installer\`$PatchCache`$"
-    if (Test-Path $installerCache) {
-        Write-Info "Windows Installer patch cache found - use Disk Cleanup tool for safe removal"
-    }
-    
-    Stop-Section
 }
 
 # ============================================================================
 # Windows Logs
 # ============================================================================
 
-function Clear-SystemLogs {
+function Clear-WindowsLogs {
     <#
     .SYNOPSIS
-        Clean Windows system logs (requires admin)
+        Clean Windows log files (requires admin)
     #>
+    param([int]$DaysOld = 7)
+
     if (-not (Test-IsAdmin)) {
-        Write-Warning "System log cleanup requires administrator privileges"
+        Write-Debug "Skipping Windows logs cleanup - requires admin"
         return
     }
-    
-    Start-Section "System Logs"
-    
-    # Windows Logs
-    $windowsLogs = "$env:SystemRoot\Logs"
-    if (Test-Path $windowsLogs) {
-        Remove-OldFiles -Path $windowsLogs -DaysOld $script:Config.LogAgeDays -Description "Windows logs"
-    }
-    
-    # CBS logs (Component Based Servicing)
-    $cbsLogs = "$env:SystemRoot\Logs\CBS"
-    if (Test-Path $cbsLogs) {
-        Remove-OldFiles -Path $cbsLogs -DaysOld 14 -Filter "*.log" -Description "CBS logs"
-    }
-    
-    # DISM logs
-    $dismLogs = "$env:SystemRoot\Logs\DISM"
-    if (Test-Path $dismLogs) {
-        Remove-OldFiles -Path $dismLogs -DaysOld 14 -Description "DISM logs"
-    }
-    
-    # Windows Error Reporting
-    $werSystem = "$env:ProgramData\Microsoft\Windows\WER"
-    if (Test-Path $werSystem) {
-        Clear-DirectoryContents -Path "$werSystem\ReportArchive" -Description "System Error Reports"
-        Clear-DirectoryContents -Path "$werSystem\ReportQueue" -Description "System Error Queue"
-    }
-    
-    # Event logs (just clear old backups, not active logs)
-    $eventLogBackups = "$env:SystemRoot\System32\winevt\Logs"
-    if (Test-Path $eventLogBackups) {
-        $oldBackups = Get-ChildItem -Path $eventLogBackups -Filter "Archive-*.evtx" -ErrorAction SilentlyContinue
-        if ($oldBackups) {
-            Remove-SafeItems -Paths ($oldBackups | ForEach-Object { $_.FullName }) -Description "Event log archives"
+
+    # Windows Logs directory
+    $logPaths = @(
+        "$env:WINDIR\Logs\CBS"
+        "$env:WINDIR\Logs\DISM"
+        "$env:WINDIR\Logs\DPX"
+        "$env:WINDIR\Logs\WindowsUpdate"
+        "$env:WINDIR\Logs\SIH"
+        "$env:WINDIR\Logs\waasmedia"
+        "$env:WINDIR\Debug"
+        "$env:WINDIR\Panther"
+        "$env:PROGRAMDATA\Microsoft\Windows\WER\ReportQueue"
+        "$env:PROGRAMDATA\Microsoft\Windows\WER\ReportArchive"
+    )
+
+    foreach ($path in $logPaths) {
+        if (Test-Path $path) {
+            Remove-OldFiles -Path $path -DaysOld $DaysOld -Description "$(Split-Path -Leaf $path) logs"
         }
     }
-    
-    # IIS logs (if installed)
-    $iisLogs = "$env:SystemDrive\inetpub\logs\LogFiles"
-    if (Test-Path $iisLogs) {
-        Remove-OldFiles -Path $iisLogs -DaysOld 30 -Description "IIS logs"
+
+    # Setup logs (*.log files in Windows directory)
+    $setupLogs = Get-ChildItem -Path "$env:WINDIR\*.log" -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$DaysOld) }
+    if ($setupLogs) {
+        $paths = $setupLogs | ForEach-Object { $_.FullName }
+        Remove-SafeItems -Paths $paths -Description "Windows setup logs"
     }
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Memory Dumps
+# Windows Update Cleanup
+# ============================================================================
+
+function Clear-WindowsUpdateFiles {
+    <#
+    .SYNOPSIS
+        Clean Windows Update download cache (requires admin)
+    #>
+
+    if (-not (Test-IsAdmin)) {
+        Write-Debug "Skipping Windows Update cleanup - requires admin"
+        return
+    }
+
+    # Stop Windows Update service
+    $wuService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
+    $wasRunning = $wuService.Status -eq 'Running'
+
+    if ($wasRunning) {
+        if (Test-DryRunMode) {
+            Write-DryRun "Windows Update cache (service would be restarted)"
+            return
+        }
+
+        try {
+            Stop-Service -Name wuauserv -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Debug "Could not stop Windows Update service: $_"
+            return
+        }
+    }
+
+    try {
+        # Clean download cache
+        $wuDownloadPath = "$env:WINDIR\SoftwareDistribution\Download"
+        if (Test-Path $wuDownloadPath) {
+            Clear-DirectoryContents -Path $wuDownloadPath -Description "Windows Update download cache"
+        }
+
+        # Clean DataStore (old update history - be careful!)
+        # Only clean temp files, not the actual database
+        $wuDataStore = "$env:WINDIR\SoftwareDistribution\DataStore\Logs"
+        if (Test-Path $wuDataStore) {
+            Clear-DirectoryContents -Path $wuDataStore -Description "Windows Update logs"
+        }
+    }
+    finally {
+        # Always restart service if it was running, even if cleanup failed
+        if ($wasRunning) {
+            Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ============================================================================
+# Installer Cleanup
+# ============================================================================
+
+function Clear-InstallerCache {
+    <#
+    .SYNOPSIS
+        Clean Windows Installer cache (orphaned patches)
+    #>
+
+    if (-not (Test-IsAdmin)) {
+        return
+    }
+
+    # Windows Installer patch cache
+    # WARNING: Be very careful here - only clean truly orphaned files
+    $installerPath = "$env:WINDIR\Installer"
+
+    # Only clean .tmp files and very old .msp files that are likely orphaned
+    if (Test-Path $installerPath) {
+        $tmpFiles = Get-ChildItem -Path $installerPath -Filter "*.tmp" -File -ErrorAction SilentlyContinue
+        if ($tmpFiles) {
+            $paths = $tmpFiles | ForEach-Object { $_.FullName }
+            Remove-SafeItems -Paths $paths -Description "Installer temp files"
+        }
+    }
+
+    # Installer logs in temp
+    $installerLogs = Get-ChildItem -Path $env:TEMP -Filter "MSI*.LOG" -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) }
+    if ($installerLogs) {
+        $paths = $installerLogs | ForEach-Object { $_.FullName }
+        Remove-SafeItems -Paths $paths -Description "Old MSI logs"
+    }
+}
+
+# ============================================================================
+# Component Store Cleanup
+# ============================================================================
+
+function Invoke-ComponentStoreCleanup {
+    <#
+    .SYNOPSIS
+        Run Windows Component Store cleanup (DISM)
+    #>
+
+    if (-not (Test-IsAdmin)) {
+        Write-Debug "Skipping component store cleanup - requires admin"
+        return
+    }
+
+    if (Test-DryRunMode) {
+        Write-DryRun "Component Store cleanup (DISM)"
+        Set-SectionActivity
+        return
+    }
+
+    try {
+        Write-Info "Running Component Store cleanup (this may take a while)..."
+
+        # Run DISM cleanup
+        $result = Start-Process -FilePath "dism.exe" `
+            -ArgumentList "/Online", "/Cleanup-Image", "/StartComponentCleanup" `
+            -Wait -PassThru -NoNewWindow -ErrorAction Stop
+
+        if ($result.ExitCode -eq 0) {
+            Write-Success "Component Store cleanup"
+            Set-SectionActivity
+        }
+        else {
+            Write-Debug "DISM returned exit code: $($result.ExitCode)"
+        }
+    }
+    catch {
+        Write-Debug "Component Store cleanup failed: $_"
+    }
+}
+
+# ============================================================================
+# Memory Dump Cleanup
 # ============================================================================
 
 function Clear-MemoryDumps {
     <#
     .SYNOPSIS
-        Clean system memory dumps (requires admin)
+        Clean Windows memory dumps
     #>
-    if (-not (Test-IsAdmin)) {
-        Write-Warning "Memory dump cleanup requires administrator privileges"
-        return
-    }
-    
-    Start-Section "Memory Dumps"
-    
-    # System minidumps
-    $minidump = "$env:SystemRoot\Minidump"
-    if (Test-Path $minidump) {
-        Remove-OldFiles -Path $minidump -DaysOld $script:Config.CrashReportAgeDays -Description "Minidumps"
-    }
-    
-    # Full memory dump
-    $memoryDmp = "$env:SystemRoot\MEMORY.DMP"
-    if (Test-Path $memoryDmp) {
-        $dmpSize = (Get-Item $memoryDmp).Length
-        if ($dmpSize -gt 0) {
-            Remove-SafeItem -Path $memoryDmp -Description "Full memory dump ($(Format-ByteSize $dmpSize))"
-        }
-    }
-    
-    # LiveKernelReports
-    $liveKernel = "$env:SystemRoot\LiveKernelReports"
-    if (Test-Path $liveKernel) {
-        Remove-OldFiles -Path $liveKernel -DaysOld 7 -Description "LiveKernel reports"
-    }
-    
-    Stop-Section
-}
 
-# ============================================================================
-# Windows Defender
-# ============================================================================
-
-function Clear-DefenderCache {
-    <#
-    .SYNOPSIS
-        Clean Windows Defender caches and history
-    #>
-    if (-not (Test-IsAdmin)) {
-        Write-Warning "Defender cleanup requires administrator privileges"
-        return
-    }
-    
-    Start-Section "Windows Defender"
-    
-    # Defender scan history
-    $defenderHistory = "$env:ProgramData\Microsoft\Windows Defender\Scans\History"
-    if (Test-Path $defenderHistory) {
-        Remove-OldFiles -Path $defenderHistory -DaysOld 30 -Description "Defender scan history"
-    }
-    
-    # Defender quarantine (be careful - don't auto-clean)
-    $quarantine = "$env:ProgramData\Microsoft\Windows Defender\Quarantine"
-    if (Test-Path $quarantine) {
-        $quarantineItems = Get-ChildItem -Path $quarantine -Recurse -ErrorAction SilentlyContinue
-        if ($quarantineItems) {
-            Write-Warning "Defender quarantine has items - review in Windows Security before cleaning"
-        }
-    }
-    
-    Stop-Section
-}
-
-# ============================================================================
-# Disk Cleanup Integration
-# ============================================================================
-
-function Invoke-DiskCleanup {
-    <#
-    .SYNOPSIS
-        Run Windows Disk Cleanup utility with common options
-    #>
-    param(
-        [switch]$SystemFiles,
-        [switch]$Silent
+    $dumpPaths = @(
+        "$env:WINDIR\MEMORY.DMP"
+        "$env:WINDIR\Minidump"
+        "$env:LOCALAPPDATA\CrashDumps"
     )
-    
-    Start-Section "Disk Cleanup"
-    
-    if (Test-DryRunMode) {
-        Write-DryRun "Would run Windows Disk Cleanup"
-        Stop-Section
+
+    foreach ($path in $dumpPaths) {
+        if (Test-Path $path -PathType Leaf) {
+            # Single file (MEMORY.DMP)
+            Remove-SafeItem -Path $path -Description "Memory dump"
+        }
+        elseif (Test-Path $path -PathType Container) {
+            # Directory (Minidump, CrashDumps)
+            Clear-DirectoryContents -Path $path -Description "$(Split-Path -Leaf $path)"
+        }
+    }
+}
+
+# ============================================================================
+# Font Cache
+# ============================================================================
+
+function Clear-SystemFontCache {
+    <#
+    .SYNOPSIS
+        Clear Windows font cache (requires admin and may need restart)
+    #>
+
+    if (-not (Test-IsAdmin)) {
         return
     }
-    
-    # Create a sageset with our preferred options
-    $sagesetNum = 99
-    $cleanupKeys = @(
+
+    $fontCacheService = Get-Service -Name "FontCache" -ErrorAction SilentlyContinue
+
+    if ($fontCacheService) {
+        if (Test-DryRunMode) {
+            Write-DryRun "System font cache"
+            return
+        }
+
+        try {
+            # Stop font cache service
+            Stop-Service -Name "FontCache" -Force -ErrorAction SilentlyContinue
+
+            # Clear font cache files
+            $fontCachePath = "$env:WINDIR\ServiceProfiles\LocalService\AppData\Local\FontCache"
+            if (Test-Path $fontCachePath) {
+                Clear-DirectoryContents -Path $fontCachePath -Description "System font cache"
+            }
+
+            # Restart font cache service
+            Start-Service -Name "FontCache" -ErrorAction SilentlyContinue
+        }
+        catch {
+            Write-Debug "Font cache cleanup failed: $_"
+            Start-Service -Name "FontCache" -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ============================================================================
+# Disk Cleanup Tool Integration
+# ============================================================================
+
+function Invoke-DiskCleanupTool {
+    <#
+    .SYNOPSIS
+        Run Windows built-in Disk Cleanup tool with predefined settings
+    #>
+    param([switch]$Full)
+
+    if (-not (Test-IsAdmin)) {
+        Write-Debug "Skipping Disk Cleanup tool - requires admin for full cleanup"
+    }
+
+    if (Test-DryRunMode) {
+        Write-DryRun "Windows Disk Cleanup tool"
+        return
+    }
+
+    # Set up registry keys for automated cleanup
+    $cleanupKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
+
+    $cleanupItems = @(
         "Active Setup Temp Folders"
-        "BranchCache"
         "Downloaded Program Files"
         "Internet Cache Files"
-        "Memory Dump Files"
         "Old ChkDsk Files"
-        "Previous Installations"
         "Recycle Bin"
         "Setup Log Files"
         "System error memory dump files"
@@ -218,127 +326,98 @@ function Invoke-DiskCleanup {
         "Temporary Files"
         "Temporary Setup Files"
         "Thumbnail Cache"
-        "Update Cleanup"
-        "Upgrade Discarded Files"
         "Windows Error Reporting Archive Files"
         "Windows Error Reporting Queue Files"
         "Windows Error Reporting System Archive Files"
         "Windows Error Reporting System Queue Files"
-        "Windows Upgrade Log Files"
     )
-    
-    # Set registry keys for sageset
-    $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
-    foreach ($key in $cleanupKeys) {
-        $keyPath = Join-Path $regPath $key
-        if (Test-Path $keyPath) {
-            Set-ItemProperty -Path $keyPath -Name "StateFlags$sagesetNum" -Value 2 -ErrorAction SilentlyContinue
+
+    if ($Full -and (Test-IsAdmin)) {
+        $cleanupItems += @(
+            "Previous Installations"
+            "Temporary Windows installation files"
+            "Update Cleanup"
+            "Windows Defender"
+            "Windows Upgrade Log Files"
+        )
+    }
+
+    # Enable cleanup items in registry
+    foreach ($item in $cleanupItems) {
+        $itemPath = Join-Path $cleanupKey $item
+        if (Test-Path $itemPath) {
+            Set-ItemProperty -Path $itemPath -Name "StateFlags0100" -Value 2 -Type DWord -ErrorAction SilentlyContinue
         }
     }
-    
-    Write-Info "Running Disk Cleanup..."
-    
-    if ($Silent) {
-        Start-Process cleanmgr.exe -ArgumentList "/sagerun:$sagesetNum" -Wait -WindowStyle Hidden
+
+    try {
+        # Run disk cleanup
+        $process = Start-Process -FilePath "cleanmgr.exe" `
+            -ArgumentList "/sagerun:100" `
+            -Wait -PassThru -NoNewWindow -ErrorAction Stop
+
+        if ($process.ExitCode -eq 0) {
+            Write-Success "Windows Disk Cleanup"
+            Set-SectionActivity
+        }
     }
-    else {
-        Start-Process cleanmgr.exe -ArgumentList "/sagerun:$sagesetNum" -Wait
+    catch {
+        Write-Debug "Disk Cleanup failed: $_"
     }
-    
-    Write-Success "Disk Cleanup completed"
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Storage Sense
-# ============================================================================
-
-function Invoke-StorageSense {
-    <#
-    .SYNOPSIS
-        Trigger Windows Storage Sense cleanup
-    #>
-    Start-Section "Storage Sense"
-    
-    if (Test-DryRunMode) {
-        Write-DryRun "Would trigger Storage Sense"
-        Stop-Section
-        return
-    }
-    
-    # Check if Storage Sense is available (Windows 10 1809+)
-    $storageSenseKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy"
-    if (-not (Test-Path $storageSenseKey)) {
-        Write-Warning "Storage Sense not available on this system"
-        Stop-Section
-        return
-    }
-    
-    Write-Info "Triggering Storage Sense..."
-    
-    # Run storage sense
-    $ssPath = "$env:SystemRoot\System32\StorSenseConfig.exe"
-    if (Test-Path $ssPath) {
-        Start-Process $ssPath -ArgumentList "/cleanup" -Wait -ErrorAction SilentlyContinue
-        Write-Success "Storage Sense cleanup triggered"
-    }
-    else {
-        Write-Warning "Storage Sense executable not found"
-    }
-    
-    Stop-Section
-}
-
-# ============================================================================
-# Main System Cleanup
+# Main System Cleanup Function
 # ============================================================================
 
 function Invoke-SystemCleanup {
     <#
     .SYNOPSIS
-        Run all system-level cleanup operations
+        Run all system-level cleanup tasks (requires admin for full effect)
     #>
     param(
-        [switch]$IncludeLogs,
-        [switch]$IncludeDumps,
-        [switch]$IncludeDefender,
-        [switch]$IncludeDiskCleanup,
-        [switch]$All
+        [switch]$IncludeComponentStore,
+        [switch]$IncludeDiskCleanup
     )
-    
+
+    Start-Section "System cleanup"
+
     if (-not (Test-IsAdmin)) {
-        Write-Error "System cleanup requires administrator privileges"
-        Write-Info "Please run WinMole as Administrator"
-        return
+        Write-Warning "Running without admin - some cleanup tasks will be skipped"
     }
-    
-    Reset-CleanupStats
-    
-    # Always clean system caches
-    Clear-SystemCaches
-    
-    if ($All -or $IncludeLogs) {
-        Clear-SystemLogs
+
+    # System temp files
+    Clear-SystemTempFiles
+
+    # Windows logs
+    Clear-WindowsLogs -DaysOld 7
+
+    # Windows Update cache
+    Clear-WindowsUpdateFiles
+
+    # Installer cache
+    Clear-InstallerCache
+
+    # Memory dumps
+    Clear-MemoryDumps
+
+    # Font cache
+    Clear-SystemFontCache
+
+    # Optional: Component Store (can take a long time)
+    if ($IncludeComponentStore) {
+        Invoke-ComponentStoreCleanup
     }
-    
-    if ($All -or $IncludeDumps) {
-        Clear-MemoryDumps
+
+    # Optional: Windows Disk Cleanup tool
+    if ($IncludeDiskCleanup) {
+        Invoke-DiskCleanupTool -Full
     }
-    
-    if ($All -or $IncludeDefender) {
-        Clear-DefenderCache
-    }
-    
-    if ($All -or $IncludeDiskCleanup) {
-        Invoke-DiskCleanup -Silent
-    }
-    
-    $stats = Get-CleanupStats
-    Show-Summary -SizeBytes ($stats.TotalSizeKB * 1024) -ItemCount $stats.TotalItems -Action "Cleaned"
+
+    Stop-Section
 }
 
 # ============================================================================
-# Exports (functions are available via dot-sourcing)
+# Exports
 # ============================================================================
-# Functions: Clear-SystemCaches, Clear-SystemLogs, Invoke-SystemCleanup, etc.
+# Functions: Clear-SystemTempFiles, Clear-WindowsLogs, Invoke-SystemCleanup, etc.

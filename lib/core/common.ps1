@@ -90,7 +90,7 @@ function Request-AdminPrivileges {
         Restarts the script with elevated privileges using UAC
     #>
     if (-not (Test-IsAdmin)) {
-        Write-Warning "Some operations require administrator privileges."
+        Write-WinMoleWarning "Some operations require administrator privileges."
         
         if (Read-Confirmation -Prompt "Restart with admin privileges?" -Default $true) {
             $scriptPath = $MyInvocation.PSCommandPath

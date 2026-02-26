@@ -310,7 +310,7 @@ function Clear-DockerCache {
     # Check if Docker daemon is running
     $dockerRunning = docker info 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Docker daemon is not running"
+        Write-WinMoleWarning "Docker daemon is not running"
         Stop-Section
         return
     }

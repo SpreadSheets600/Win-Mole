@@ -77,7 +77,7 @@ function Build-StatusTool {
     # Check if Go is installed
     $goCmd = Get-Command "go" -ErrorAction SilentlyContinue
     if (-not $goCmd) {
-        Write-Error "Go is not installed or not in PATH"
+        Write-WinMoleError "Go is not installed or not in PATH"
         Write-Host ""
         Write-Host "  Install Go from: https://go.dev/dl/"
         Write-Host ""
@@ -99,7 +99,7 @@ function Build-StatusTool {
         $buildOutput = & go build -ldflags="-s -w" -o $binaryPath . 2>&1
         
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Build failed: $buildOutput"
+            Write-WinMoleError "Build failed: $buildOutput"
             return $false
         }
         
@@ -107,7 +107,7 @@ function Build-StatusTool {
         return $true
     }
     catch {
-        Write-Error "Build failed: $_"
+        Write-WinMoleError "Build failed: $_"
         return $false
     }
     finally {
@@ -162,7 +162,7 @@ try {
 }
 catch {
     Write-Host ""
-    Write-Error "An error occurred: $_"
+    Write-WinMoleError "An error occurred: $_"
     Write-Host ""
     exit 1
 }

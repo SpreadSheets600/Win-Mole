@@ -1,540 +1,628 @@
 # WinMole - Uninstall Command
-# Smart application uninstaller with leftover detection
+# Interactive application uninstaller for Windows
 
 #Requires -Version 5.1
+[CmdletBinding()]
 param(
-    [string]$AppName,
-    [switch]$List,
-    [switch]$Leftovers,
-    [switch]$DryRun,
-    [switch]$Help
+    [Alias('d')]
+    [switch]$DebugMode,
+    
+    [Alias('r')]
+    [switch]$Rescan,
+    
+    [Alias('h')]
+    [switch]$ShowHelp
 )
 
-$ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
-# Get script location
+# Script location
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $libDir = Join-Path (Split-Path -Parent $scriptDir) "lib"
 
-# Import modules
-. "$libDir\core\common.ps1"
+# Import core modules
+. "$libDir\core\base.ps1"
+. "$libDir\core\log.ps1"
+. "$libDir\core\ui.ps1"
+. "$libDir\core\file_ops.ps1"
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+$script:CacheDir = "$env:USERPROFILE\.cache\winmole"
+$script:AppCacheFile = "$script:CacheDir\app_scan_cache.json"
+$script:CacheTTLHours = 24
 
 # ============================================================================
 # Help
 # ============================================================================
 
 function Show-UninstallHelp {
-    $cyan = $script:Colors.Cyan
-    $gray = $script:Colors.Gray
-    $nc = $script:Colors.NC
-    
+    $esc = [char]27
     Write-Host ""
-    Write-Host "  ${cyan}WinMole Uninstall${nc} - Smart app removal"
+    Write-Host "$esc[1;35mwinmole uninstall$esc[0m - Interactive application uninstaller"
     Write-Host ""
-    Write-Host "  ${gray}USAGE:${nc}"
-    Write-Host "    winmole uninstall [options]"
-    Write-Host "    winmole uninstall <app-name>"
+    Write-Host "$esc[33mUsage:$esc[0m winmole uninstall [options]"
     Write-Host ""
-    Write-Host "  ${gray}OPTIONS:${nc}"
-    Write-Host "    -List           List installed applications"
-    Write-Host "    -Leftovers      Scan for leftover files from uninstalled apps"
-    Write-Host "    -DryRun         Preview changes without deleting"
-    Write-Host "    -Help           Show this help"
+    Write-Host "$esc[33mOptions:$esc[0m"
+    Write-Host "  --rescan     Force rescan of installed applications"
+    Write-Host "  --debug      Enable debug logging"
+    Write-Host "  --help       Show this help message"
     Write-Host ""
-    Write-Host "  ${gray}EXAMPLES:${nc}"
-    Write-Host "    winmole uninstall                # Interactive mode"
-    Write-Host "    winmole uninstall -List          # List all apps"
-    Write-Host "    winmole uninstall 'VLC'          # Uninstall VLC"
-    Write-Host "    winmole uninstall -Leftovers     # Find leftover files"
+    Write-Host "$esc[33mFeatures:$esc[0m"
+    Write-Host "  - Scans installed programs from registry and Windows Apps"
+    Write-Host "  - Shows program size and last used date"
+    Write-Host "  - Interactive selection with arrow keys"
+    Write-Host "  - Cleans leftover files after uninstall"
     Write-Host ""
+}
+
+# ============================================================================
+# Protected Applications
+# ============================================================================
+
+$script:ProtectedApps = @(
+    "Microsoft Windows"
+    "Windows Feature Experience Pack"
+    "Microsoft Edge"
+    "Microsoft Edge WebView2"
+    "Windows Security"
+    "Microsoft Visual C++ *"
+    "Microsoft .NET *"
+    ".NET Desktop Runtime*"
+    "Microsoft Update Health Tools"
+    "NVIDIA Graphics Driver*"
+    "AMD Software*"
+    "Intel*Driver*"
+)
+
+function Test-ProtectedApp {
+    param([string]$AppName)
+
+    foreach ($pattern in $script:ProtectedApps) {
+        if ($AppName -like $pattern) {
+            return $true
+        }
+    }
+    return $false
 }
 
 # ============================================================================
 # Application Discovery
 # ============================================================================
 
-function Get-InstalledApps {
+function Get-InstalledApplications {
     <#
     .SYNOPSIS
-        Get list of installed applications from registry and Windows
+        Scan and return all installed applications
     #>
-    $apps = [System.Collections.ArrayList]::new()
-    
-    # Registry locations for installed apps
-    $regPaths = @(
+    param([switch]$ForceRescan)
+
+    # Check cache
+    if (-not $ForceRescan -and (Test-Path $script:AppCacheFile)) {
+        $cacheInfo = Get-Item $script:AppCacheFile
+        $cacheAge = (Get-Date) - $cacheInfo.LastWriteTime
+
+        if ($cacheAge.TotalHours -lt $script:CacheTTLHours) {
+            Write-Debug "Loading from cache..."
+            try {
+                $cached = Get-Content $script:AppCacheFile | ConvertFrom-Json
+                return $cached
+            }
+            catch {
+                Write-Debug "Cache read failed, rescanning..."
+            }
+        }
+    }
+
+    Write-Info "Scanning installed applications..."
+
+    $apps = @()
+
+    # Registry paths for installed programs
+    $registryPaths = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
         "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
     )
-    
-    foreach ($path in $regPaths) {
-        $regApps = Get-ItemProperty $path -ErrorAction SilentlyContinue | 
-                   Where-Object { $_.DisplayName -and $_.UninstallString }
-        
-        foreach ($app in $regApps) {
-            $appInfo = @{
-                Name            = $app.DisplayName
-                Version         = $app.DisplayVersion
-                Publisher       = $app.Publisher
-                InstallLocation = $app.InstallLocation
-                UninstallString = $app.UninstallString
-                QuietUninstall  = $app.QuietUninstallString
-                EstimatedSize   = if ($app.EstimatedSize) { $app.EstimatedSize * 1024 } else { 0 }
-                InstallDate     = $app.InstallDate
-                Type            = "Win32"
+
+    $count = 0
+    $total = $registryPaths.Count
+
+    foreach ($path in $registryPaths) {
+        $count++
+        Write-Progress -Activity "Scanning applications" -Status "Registry path $count of $total" -PercentComplete (($count / $total) * 50)
+
+        try {
+            $regItems = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+
+            foreach ($item in $regItems) {
+                # Skip items without required properties
+                $displayName = $null
+                $uninstallString = $null
+
+                try { $displayName = $item.DisplayName } catch { }
+                try { $uninstallString = $item.UninstallString } catch { }
+
+                if ([string]::IsNullOrWhiteSpace($displayName) -or [string]::IsNullOrWhiteSpace($uninstallString)) {
+                    continue
+                }
+
+                if (Test-ProtectedApp $displayName) {
+                    continue
+                }
+
+                # Calculate size
+                $sizeKB = 0
+                try {
+                    if ($item.EstimatedSize) {
+                        $sizeKB = [long]$item.EstimatedSize
+                    }
+                    elseif ($item.InstallLocation -and (Test-Path $item.InstallLocation -ErrorAction SilentlyContinue)) {
+                        $sizeKB = Get-PathSizeKB -Path $item.InstallLocation
+                    }
+                }
+                catch { }
+
+                # Get install date
+                $installDate = $null
+                try {
+                    if ($item.InstallDate) {
+                        $installDate = [DateTime]::ParseExact($item.InstallDate, "yyyyMMdd", $null)
+                    }
+                }
+                catch { }
+
+                # Get other properties safely
+                $publisher = $null
+                $version = $null
+                $installLocation = $null
+
+                try { $publisher = $item.Publisher } catch { }
+                try { $version = $item.DisplayVersion } catch { }
+                try { $installLocation = $item.InstallLocation } catch { }
+
+                $apps += [PSCustomObject]@{
+                    Name = $displayName
+                    Publisher = $publisher
+                    Version = $version
+                    SizeKB = $sizeKB
+                    SizeHuman = Format-ByteSize -Bytes ($sizeKB * 1024)
+                    InstallLocation = $installLocation
+                    UninstallString = $uninstallString
+                    InstallDate = $installDate
+                    Source = "Registry"
+                }
             }
-            [void]$apps.Add($appInfo)
+        }
+        catch {
+            Write-Debug "Error scanning registry path $path : $_"
         }
     }
-    
-    # UWP / Store apps
+
+    # UWP / Store Apps
+    Write-Progress -Activity "Scanning applications" -Status "Scanning Windows Apps" -PercentComplete 75
+
     try {
-        $uwpApps = Get-AppxPackage -ErrorAction SilentlyContinue | 
-                   Where-Object { $_.IsFramework -eq $false }
-        
-        foreach ($app in $uwpApps) {
-            $appInfo = @{
-                Name            = $app.Name
-                Version         = $app.Version
-                Publisher       = $app.Publisher
-                InstallLocation = $app.InstallLocation
-                UninstallString = $null
-                QuietUninstall  = $null
-                EstimatedSize   = 0
-                InstallDate     = $null
-                Type            = "UWP"
-                PackageFullName = $app.PackageFullName
+        $uwpApps = Get-AppxPackage -ErrorAction SilentlyContinue |
+                   Where-Object {
+                       $_.IsFramework -eq $false -and
+                       $_.SignatureKind -ne 'System' -and
+                       -not (Test-ProtectedApp $_.Name)
+                   }
+
+        foreach ($uwp in $uwpApps) {
+            # Get friendly name
+            $name = $uwp.Name
+            try {
+                $manifest = Get-AppxPackageManifest -Package $uwp.PackageFullName -ErrorAction SilentlyContinue
+                if ($manifest.Package.Properties.DisplayName -and
+                    -not $manifest.Package.Properties.DisplayName.StartsWith("ms-resource:")) {
+                    $name = $manifest.Package.Properties.DisplayName
+                }
             }
-            [void]$apps.Add($appInfo)
+            catch { }
+
+            # Calculate size
+            $sizeKB = 0
+            if ($uwp.InstallLocation -and (Test-Path $uwp.InstallLocation)) {
+                $sizeKB = Get-PathSizeKB -Path $uwp.InstallLocation
+            }
+
+            $apps += [PSCustomObject]@{
+                Name = $name
+                Publisher = $uwp.Publisher
+                Version = $uwp.Version
+                SizeKB = $sizeKB
+                SizeHuman = Format-ByteSize -Bytes ($sizeKB * 1024)
+                InstallLocation = $uwp.InstallLocation
+                UninstallString = $null
+                PackageFullName = $uwp.PackageFullName
+                InstallDate = $null
+                Source = "WindowsStore"
+            }
         }
     }
     catch {
         Write-Debug "Could not enumerate UWP apps: $_"
     }
-    
-    # Remove duplicates by name and sort
-    $uniqueApps = $apps | Group-Object Name | ForEach-Object { $_.Group[0] } | Sort-Object Name
-    
-    return $uniqueApps
+
+    Write-Progress -Activity "Scanning applications" -Completed
+
+    # Sort by size (largest first)
+    $apps = $apps | Sort-Object -Property SizeKB -Descending
+
+    # Cache results
+    if (-not (Test-Path $script:CacheDir)) {
+        New-Item -ItemType Directory -Path $script:CacheDir -Force | Out-Null
+    }
+    $apps | ConvertTo-Json -Depth 5 | Set-Content $script:AppCacheFile
+
+    return $apps
 }
 
-function Find-App {
+# ============================================================================
+# Application Selection UI
+# ==========================================================================
+
+function Show-AppSelectionMenu {
     <#
     .SYNOPSIS
-        Find an app by name (partial match)
+        Interactive menu for selecting applications to uninstall
     #>
-    param([string]$SearchTerm)
-    
-    $apps = Get-InstalledApps
-    $matches = $apps | Where-Object { $_.Name -like "*$SearchTerm*" }
-    
-    return $matches
+    param([array]$Apps)
+
+    if ($Apps.Count -eq 0) {
+        Write-Warning "No applications found to uninstall"
+        return @()
+    }
+
+    $esc = [char]27
+    $selectedIndices = @{}
+    $currentIndex = 0
+    $pageSize = 15
+    $pageStart = 0
+    $searchTerm = ""
+    $filteredApps = $Apps
+
+    # Hide cursor (may fail in non-interactive terminals)
+    try { [Console]::CursorVisible = $false } catch { }
+
+    try {
+        while ($true) {
+            Clear-Host
+
+            # Header
+            Write-Host ""
+            Write-Host "$esc[1;35mSelect Applications to Uninstall$esc[0m"
+            Write-Host ""
+            Write-Host "$esc[90mUse: $($script:Icons.NavUp)$($script:Icons.NavDown) navigate | Space select | Enter confirm | Q quit | / search$esc[0m"
+            Write-Host ""
+
+            # Search indicator
+            if ($searchTerm) {
+                Write-Host "$esc[33mSearch:$esc[0m $searchTerm ($($filteredApps.Count) matches)"
+                Write-Host ""
+            }
+
+            # Display apps
+            $pageEnd = [Math]::Min($pageStart + $pageSize, $filteredApps.Count)
+
+            for ($i = $pageStart; $i -lt $pageEnd; $i++) {
+                $app = $filteredApps[$i]
+                $isSelected = $selectedIndices.ContainsKey($app.Name)
+                $isCurrent = ($i -eq $currentIndex)
+
+                # Selection indicator
+                $checkbox = if ($isSelected) { "$esc[32m[$($script:Icons.Success)]$esc[0m" } else { "[ ]" }
+
+                # Highlight current
+                if ($isCurrent) {
+                    Write-Host "$esc[7m" -NoNewline  # Reverse video
+                }
+
+                # App info
+                $name = $app.Name
+                if ($name.Length -gt 40) {
+                    $name = $name.Substring(0, 37) + "..."
+                }
+
+                $size = $app.SizeHuman
+                if (-not $size -or $size -eq "0B") {
+                    $size = "N/A"
+                }
+
+                Write-Host ("  {0} {1,-42} {2,10}" -f $checkbox, $name, $size) -NoNewline
+
+                if ($isCurrent) {
+                    Write-Host "$esc[0m"  # Reset
+                }
+                else {
+                    Write-Host ""
+                }
+            }
+
+            # Footer
+            Write-Host ""
+            $selectedCount = $selectedIndices.Count
+            if ($selectedCount -gt 0) {
+                $totalSize = 0
+                foreach ($key in $selectedIndices.Keys) {
+                    $app = $Apps | Where-Object { $_.Name -eq $key }
+                    if ($app.SizeKB) {
+                        $totalSize += $app.SizeKB
+                    }
+                }
+                $totalSizeHuman = Format-ByteSize -Bytes ($totalSize * 1024)
+                Write-Host "$esc[33mSelected:$esc[0m $selectedCount apps ($totalSizeHuman)"
+            }
+
+            # Page indicator
+            $totalPages = [Math]::Ceiling($filteredApps.Count / $pageSize)
+            $currentPage = [Math]::Floor($pageStart / $pageSize) + 1
+            Write-Host "$esc[90mPage $currentPage of $totalPages$esc[0m"
+
+            # Handle input
+            $key = [Console]::ReadKey($true)
+
+            switch ($key.Key) {
+                'UpArrow' {
+                    if ($currentIndex -gt 0) {
+                        $currentIndex--
+                        if ($currentIndex -lt $pageStart) {
+                            $pageStart = [Math]::Max(0, $pageStart - $pageSize)
+                        }
+                    }
+                }
+                'DownArrow' {
+                    if ($currentIndex -lt $filteredApps.Count - 1) {
+                        $currentIndex++
+                        if ($currentIndex -ge $pageStart + $pageSize) {
+                            $pageStart += $pageSize
+                        }
+                    }
+                }
+                'PageUp' {
+                    $pageStart = [Math]::Max(0, $pageStart - $pageSize)
+                    $currentIndex = $pageStart
+                }
+                'PageDown' {
+                    $pageStart = [Math]::Min($filteredApps.Count - $pageSize, $pageStart + $pageSize)
+                    if ($pageStart -lt 0) { $pageStart = 0 }
+                    $currentIndex = $pageStart
+                }
+                'Spacebar' {
+                    $app = $filteredApps[$currentIndex]
+                    if ($selectedIndices.ContainsKey($app.Name)) {
+                        $selectedIndices.Remove($app.Name)
+                    }
+                    else {
+                        $selectedIndices[$app.Name] = $true
+                    }
+                }
+                'Enter' {
+                    if ($selectedIndices.Count -gt 0) {
+                        # Return selected apps
+                        $selected = $Apps | Where-Object { $selectedIndices.ContainsKey($_.Name) }
+                        return $selected
+                    }
+                }
+                'Escape' {
+                    return @()
+                }
+                'Q' {
+                    return @()
+                }
+                'Oem2' {  # Forward slash
+                    # Search mode
+                    Write-Host ""
+                    Write-Host "Search: " -NoNewline
+                    try { [Console]::CursorVisible = $true } catch { }
+                    $searchTerm = Read-Host
+                    try { [Console]::CursorVisible = $false } catch { }
+
+                    if ($searchTerm) {
+                        $filteredApps = $Apps | Where-Object { $_.Name -like "*$searchTerm*" }
+                    }
+                    else {
+                        $filteredApps = $Apps
+                    }
+                    $currentIndex = 0
+                    $pageStart = 0
+                }
+                'Backspace' {
+                    if ($searchTerm) {
+                        $searchTerm = ""
+                        $filteredApps = $Apps
+                        $currentIndex = 0
+                        $pageStart = 0
+                    }
+                }
+            }
+        }
+    }
+    finally {
+        try { [Console]::CursorVisible = $true } catch { }
+    }
 }
 
 # ============================================================================
 # Uninstallation
 # ============================================================================
 
-function Uninstall-Application {
+function Uninstall-SelectedApps {
     <#
     .SYNOPSIS
-        Uninstall an application
+        Uninstall the selected applications
     #>
-    param(
-        [Parameter(Mandatory)]
-        [hashtable]$App,
-        
-        [switch]$CleanLeftovers
-    )
-    
-    $name = $App.Name
-    Write-Info "Uninstalling: $name"
-    
-    if (Test-DryRunMode) {
-        Write-DryRun "Would uninstall $name"
-        if ($CleanLeftovers) {
-            Write-DryRun "Would clean leftover files for $name"
-        }
-        return $true
-    }
-    
-    try {
-        if ($App.Type -eq "UWP") {
-            # UWP app removal
-            Remove-AppxPackage -Package $App.PackageFullName -ErrorAction Stop
-            Write-Success "Uninstalled UWP app: $name"
-        }
-        else {
-            # Win32 app removal
-            $uninstallCmd = if ($App.QuietUninstall) { $App.QuietUninstall } else { $App.UninstallString }
-            
-            if ($uninstallCmd -match "^msiexec") {
-                # MSI uninstall
-                $productCode = if ($uninstallCmd -match '\{[A-F0-9-]+\}') { $Matches[0] } else { $null }
-                if ($productCode) {
-                    Start-Process msiexec.exe -ArgumentList "/x $productCode /qn" -Wait -ErrorAction Stop
-                }
-                else {
-                    Start-Process cmd.exe -ArgumentList "/c $uninstallCmd" -Wait
+    param([array]$Apps)
+
+    $esc = [char]27
+
+    Write-Host ""
+    Write-Host "$esc[1;35mUninstalling Applications$esc[0m"
+    Write-Host ""
+
+    $successCount = 0
+    $failCount = 0
+
+    foreach ($app in $Apps) {
+        Write-Host "$esc[34m$($script:Icons.Arrow)$esc[0m Uninstalling: $($app.Name)" -NoNewline
+
+        try {
+            if ($app.Source -eq "WindowsStore") {
+                # UWP app
+                if ($app.PackageFullName) {
+                    Remove-AppxPackage -Package $app.PackageFullName -ErrorAction Stop
+                    Write-Host " $esc[32m$($script:Icons.Success)$esc[0m"
+                    $successCount++
                 }
             }
             else {
-                # Regular uninstaller
-                Start-Process cmd.exe -ArgumentList "/c `"$uninstallCmd`" /S" -Wait -ErrorAction SilentlyContinue
-            }
-            
-            Write-Success "Uninstalled: $name"
-        }
-        
-        # Clean leftovers if requested
-        if ($CleanLeftovers) {
-            $leftoverSize = Remove-AppLeftovers -AppName $name
-            if ($leftoverSize -gt 0) {
-                Write-Success "Cleaned $(Format-ByteSize $leftoverSize) of leftover files"
-            }
-        }
-        
-        return $true
-    }
-    catch {
-        Write-Error "Failed to uninstall $name : $_"
-        return $false
-    }
-}
+                # Registry app with uninstall string
+                $uninstallString = $app.UninstallString
 
-# ============================================================================
-# Leftover Detection and Cleanup
-# ============================================================================
+                # Handle different uninstall types
+                if ($uninstallString -like "MsiExec.exe*") {
+                    # MSI uninstall
+                    $productCode = [regex]::Match($uninstallString, '\{[0-9A-F-]+\}').Value
+                    if ($productCode) {
+                        $process = Start-Process -FilePath "msiexec.exe" `
+                            -ArgumentList "/x", $productCode, "/qn", "/norestart" `
+                            -Wait -PassThru -NoNewWindow
 
-function Get-AppLeftovers {
-    <#
-    .SYNOPSIS
-        Find leftover files for an application
-    #>
-    param([string]$AppName)
-    
-    $leftovers = [System.Collections.ArrayList]::new()
-    
-    # Common locations to check
-    $searchPaths = @(
-        "$env:APPDATA"
-        "$env:LOCALAPPDATA"
-        "$env:ProgramData"
-        "$env:ProgramFiles"
-        "${env:ProgramFiles(x86)}"
-        "$env:USERPROFILE\Documents"
-    )
-    
-    # Simplify app name for matching
-    $searchTerms = @($AppName)
-    $simplified = $AppName -replace '[^a-zA-Z0-9]', ''
-    if ($simplified -ne $AppName) {
-        $searchTerms += $simplified
-    }
-    
-    foreach ($basePath in $searchPaths) {
-        if (-not (Test-Path $basePath)) { continue }
-        
-        foreach ($term in $searchTerms) {
-            # Search for directories matching the app name
-            $matchedDirs = Get-ChildItem -Path $basePath -Directory -ErrorAction SilentlyContinue |
-                          Where-Object { $_.Name -like "*$term*" }
-            
-            foreach ($dir in $matchedDirs) {
-                $size = Get-PathSize -Path $dir.FullName
-                [void]$leftovers.Add(@{
-                    Path = $dir.FullName
-                    Size = $size
-                    Type = "Directory"
-                })
-            }
-        }
-    }
-    
-    # Check registry for leftover entries
-    $regPaths = @(
-        "HKCU:\SOFTWARE\$AppName"
-        "HKLM:\SOFTWARE\$AppName"
-    )
-    
-    foreach ($regPath in $regPaths) {
-        if (Test-Path $regPath) {
-            [void]$leftovers.Add(@{
-                Path = $regPath
-                Size = 0
-                Type = "Registry"
-            })
-        }
-    }
-    
-    return $leftovers
-}
-
-function Remove-AppLeftovers {
-    <#
-    .SYNOPSIS
-        Remove leftover files for an application
-    #>
-    param([string]$AppName)
-    
-    $leftovers = Get-AppLeftovers -AppName $AppName
-    $totalSize = 0
-    
-    foreach ($leftover in $leftovers) {
-        if ($leftover.Type -eq "Directory") {
-            if (Test-SafePath -Path $leftover.Path) {
-                if (Test-DryRunMode) {
-                    Write-DryRun "Would remove: $($leftover.Path)"
+                        if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
+                            Write-Host " $esc[32m$($script:Icons.Success)$esc[0m"
+                            $successCount++
+                        }
+                        else {
+                            Write-Host " $esc[33m(requires interaction)$esc[0m"
+                            # Fallback to interactive uninstall
+                            Start-Process -FilePath "msiexec.exe" -ArgumentList "/x", $productCode -Wait
+                            $successCount++
+                        }
+                    }
                 }
                 else {
-                    Remove-Item -Path $leftover.Path -Recurse -Force -ErrorAction SilentlyContinue
-                }
-                $totalSize += $leftover.Size
-            }
-        }
-        elseif ($leftover.Type -eq "Registry") {
-            if (Test-DryRunMode) {
-                Write-DryRun "Would remove registry: $($leftover.Path)"
-            }
-            else {
-                Remove-Item -Path $leftover.Path -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-    
-    return $totalSize
-}
+                    # Direct executable uninstall
+                    # Try silent uninstall first
+                    $silentArgs = @("/S", "/silent", "/quiet", "-s", "-silent", "-quiet", "/VERYSILENT")
+                    $uninstalled = $false
 
-function Find-AllLeftovers {
-    <#
-    .SYNOPSIS
-        Find leftover files from all previously uninstalled applications
-    #>
-    Start-Section "Scanning for Leftovers"
-    
-    $installedApps = Get-InstalledApps | ForEach-Object { $_.Name }
-    $leftovers = [System.Collections.ArrayList]::new()
-    
-    $searchPaths = @(
-        "$env:APPDATA"
-        "$env:LOCALAPPDATA"
-    )
-    
-    $spinner = 0
-    $total = 0
-    
-    foreach ($basePath in $searchPaths) {
-        if (-not (Test-Path $basePath)) { continue }
-        
-        $dirs = Get-ChildItem -Path $basePath -Directory -ErrorAction SilentlyContinue
-        $total += $dirs.Count
-    }
-    
-    $checked = 0
-    
-    foreach ($basePath in $searchPaths) {
-        if (-not (Test-Path $basePath)) { continue }
-        
-        $dirs = Get-ChildItem -Path $basePath -Directory -ErrorAction SilentlyContinue
-        
-        foreach ($dir in $dirs) {
-            $checked++
-            
-            if ($checked % 10 -eq 0) {
-                Update-Spinner "Checking directories... ($checked/$total)"
-            }
-            
-            # Check if this directory belongs to an installed app
-            $belongsToApp = $false
-            foreach ($appName in $installedApps) {
-                if ($dir.Name -like "*$appName*" -or $appName -like "*$($dir.Name)*") {
-                    $belongsToApp = $true
-                    break
-                }
-            }
-            
-            if (-not $belongsToApp) {
-                # Check if directory is old (not modified recently)
-                $lastMod = $dir.LastWriteTime
-                if ($lastMod -lt (Get-Date).AddDays(-60)) {
-                    $size = Get-PathSize -Path $dir.FullName
-                    if ($size -gt 1MB) {  # Only report significant leftovers
-                        [void]$leftovers.Add(@{
-                            Path = $dir.FullName
-                            Size = $size
-                            LastModified = $lastMod
-                        })
+                    foreach ($arg in $silentArgs) {
+                        try {
+                            $process = Start-Process -FilePath "cmd.exe" `
+                                -ArgumentList "/c", "`"$uninstallString`"", $arg `
+                                -Wait -PassThru -NoNewWindow -ErrorAction SilentlyContinue
+
+                            if ($process.ExitCode -eq 0) {
+                                Write-Host " $esc[32m$($script:Icons.Success)$esc[0m"
+                                $successCount++
+                                $uninstalled = $true
+                                break
+                            }
+                        }
+                        catch { }
+                    }
+
+                    if (-not $uninstalled) {
+                        # Fallback to interactive - don't count as automatic success
+                        Write-Host " $esc[33m(launching uninstaller - verify completion manually)$esc[0m"
+                        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$uninstallString`"" -Wait
+                        # Note: Not incrementing $successCount since we can't verify if user completed or cancelled
                     }
                 }
             }
+
+            # Clean leftover files
+            if ($app.InstallLocation -and (Test-Path $app.InstallLocation)) {
+                Write-Host "  $esc[90mCleaning leftover files...$esc[0m"
+                Remove-SafeItem -Path $app.InstallLocation -Description "Leftover files" -Recurse
+            }
+        }
+        catch {
+            Write-Host " $esc[31m$($script:Icons.Error)$esc[0m"
+            Write-Debug "Uninstall failed: $_"
+            $failCount++
         }
     }
-    
-    Stop-Spinner
-    Stop-Section
-    
-    return $leftovers | Sort-Object Size -Descending
+
+    # Summary
+    Write-Host ""
+    Write-Host "$esc[1;35mUninstall Complete$esc[0m"
+    Write-Host "  Successfully uninstalled: $esc[32m$successCount$esc[0m"
+    if ($failCount -gt 0) {
+        Write-Host "  Failed: $esc[31m$failCount$esc[0m"
+    }
+    Write-Host ""
+
+    # Clear cache
+    if (Test-Path $script:AppCacheFile) {
+        Remove-Item $script:AppCacheFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ============================================================================
-# Interactive Mode
-# ============================================================================
-
-function Show-AppList {
-    $apps = Get-InstalledApps
-    
-    $cyan = $script:Colors.Cyan
-    $gray = $script:Colors.Gray
-    $nc = $script:Colors.NC
-    
-    Write-Host ""
-    Write-Host "  ${cyan}Installed Applications${nc} ($($apps.Count) total)"
-    Write-Host ""
-    
-    foreach ($app in $apps | Select-Object -First 50) {
-        $size = if ($app.EstimatedSize -gt 0) { Format-ByteSize $app.EstimatedSize } else { "?" }
-        $type = if ($app.Type -eq "UWP") { "[UWP]" } else { "" }
-        Write-Host "  $($app.Name) ${gray}$size $type${nc}"
-    }
-    
-    if ($apps.Count -gt 50) {
-        Write-Host ""
-        Write-Host "  ${gray}... and $($apps.Count - 50) more${nc}"
-    }
-    Write-Host ""
-}
-
-function Show-UninstallMenu {
-    $apps = Get-InstalledApps | Where-Object { $_.Type -eq "Win32" } | Select-Object -First 20
-    
-    $options = $apps | ForEach-Object {
-        @{
-            Name = $_.Name
-            Description = if ($_.EstimatedSize -gt 0) { Format-ByteSize $_.EstimatedSize } else { "" }
-            App = $_
-        }
-    }
-    
-    $selected = Show-SelectionList -Title "Select apps to uninstall" -Items $options -MultiSelect
-    
-    return $selected
-}
-
-# ============================================================================
-# Main
+# Main Entry Point
 # ============================================================================
 
 function Main {
-    Initialize-WinMole
-    
-    if ($Help) {
+    # Enable debug if requested
+    if ($DebugMode) {
+        $env:WINMOLE_DEBUG = "1"
+        $DebugPreference = "Continue"
+    }
+
+    # Show help
+    if ($ShowHelp) {
         Show-UninstallHelp
         return
     }
-    
-    if ($DryRun -or $env:WINMOLE_DRY_RUN -eq "1") {
-        Set-DryRunMode -Enabled $true
-        Write-Host ""
-        Write-Warning "DRY RUN MODE - No changes will be made"
-    }
-    
-    if ($List) {
-        Show-AppList
-        return
-    }
-    
-    if ($Leftovers) {
-        $leftovers = Find-AllLeftovers
-        
-        if ($leftovers.Count -eq 0) {
-            Write-Host ""
-            Write-Success "No significant leftover files found"
-            Write-Host ""
-            return
-        }
-        
-        Write-Host ""
-        Write-Host "  Found $($leftovers.Count) potential leftover directories:"
-        Write-Host ""
-        
-        $totalSize = 0
-        foreach ($leftover in $leftovers | Select-Object -First 20) {
-            Write-Host "  $(Format-ByteSize $leftover.Size)  $($leftover.Path)"
-            $totalSize += $leftover.Size
-        }
-        
-        Write-Host ""
-        Write-Host "  Total: $(Format-ByteSize $totalSize)"
-        Write-Host ""
-        
-        if (Read-Confirmation -Prompt "Clean these leftovers?" -Default $false) {
-            foreach ($leftover in $leftovers) {
-                if (Test-SafePath -Path $leftover.Path) {
-                    Remove-SafeItem -Path $leftover.Path -Description (Split-Path -Leaf $leftover.Path)
-                }
-            }
-            Show-Summary -SizeBytes $totalSize -ItemCount $leftovers.Count -Action "Cleaned"
-        }
-        
-        return
-    }
-    
-    if ($AppName) {
-        $matches = Find-App -SearchTerm $AppName
-        
-        if ($matches.Count -eq 0) {
-            Write-Error "No applications found matching '$AppName'"
-            return
-        }
-        
-        if ($matches.Count -eq 1) {
-            $app = $matches[0]
-            Write-Host ""
-            Write-Host "  Found: $($app.Name)"
-            
-            if (Read-Confirmation -Prompt "Uninstall $($app.Name)?" -Default $false) {
-                Uninstall-Application -App $app -CleanLeftovers
-            }
-        }
-        else {
-            Write-Host ""
-            Write-Host "  Multiple matches found:"
-            for ($i = 0; $i -lt $matches.Count; $i++) {
-                Write-Host "  [$i] $($matches[$i].Name)"
-            }
-            Write-Host ""
-            $choice = Read-Host "  Enter number to uninstall (or press Enter to cancel)"
-            
-            if ($choice -match '^\d+$' -and [int]$choice -lt $matches.Count) {
-                $app = $matches[[int]$choice]
-                Uninstall-Application -App $app -CleanLeftovers
-            }
-        }
-        
-        return
-    }
-    
-    # Interactive mode
+
+    # Clear screen
     Clear-Host
-    Show-Banner
-    
-    $selected = Show-UninstallMenu
-    
-    if ($selected.Count -eq 0) {
-        Write-Host ""
+
+    # Get installed apps
+    $apps = Get-InstalledApplications -ForceRescan:$Rescan
+
+    if ($apps.Count -eq 0) {
+        Write-Warning "No applications found"
         return
     }
-    
-    foreach ($item in $selected) {
-        Uninstall-Application -App $item.App -CleanLeftovers
+
+    Write-Info "Found $($apps.Count) applications"
+
+    # Show selection menu
+    $selected = Show-AppSelectionMenu -Apps $apps
+
+    if ($selected.Count -eq 0) {
+        Write-Info "No applications selected"
+        return
+    }
+
+    # Confirm uninstall
+    $esc = [char]27
+    Clear-Host
+    Write-Host ""
+    Write-Host "$esc[33mThe following applications will be uninstalled:$esc[0m"
+    Write-Host ""
+
+    foreach ($app in $selected) {
+        Write-Host "  $($script:Icons.List) $($app.Name) ($($app.SizeHuman))"
+    }
+
+    Write-Host ""
+    $confirm = Read-Host "Continue? (y/N)"
+
+    if ($confirm -eq 'y' -or $confirm -eq 'Y') {
+        Uninstall-SelectedApps -Apps $selected
+    }
+    else {
+        Write-Info "Cancelled"
     }
 }
 
-# Run
-try {
-    Main
-}
-finally {
-    Clear-TempFiles
-}
+# Run main
+Main

@@ -34,6 +34,7 @@ $libDir = Join-Path (Split-Path -Parent $scriptDir) "lib"
 $script:OptimizationsApplied = 0
 $script:IssuesFound = 0
 $script:IssuesFixed = 0
+$script:RepairsApplied = 0
 
 # ============================================================================
 # Help
@@ -61,10 +62,6 @@ function Show-OptimizeHelp {
     Write-Host "$esc[33mExamples:$esc[0m"
     Write-Host "  winmole optimize              # Run all optimizations"
     Write-Host "  winmole optimize --dry-run    # Preview what would happen"
-    Write-Host ""
-    Write-Host "$esc[33mExamples:$esc[0m"
-    Write-Host "  winmole optimize            # Run all optimizations"
-    Write-Host "  winmole optimize --dry-run  # Preview what would happen"
     Write-Host ""
 }
 

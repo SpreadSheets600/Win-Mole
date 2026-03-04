@@ -271,22 +271,28 @@ function Clear-SystemFontCache {
             return
         }
 
+        $wasRunning = $fontCacheService.Status -eq 'Running'
+
         try {
-            # Stop font cache service
-            Stop-Service -Name "FontCache" -Force -ErrorAction SilentlyContinue
+            # Stop font cache service if running
+            if ($wasRunning) {
+                Stop-Service -Name "FontCache" -Force -ErrorAction SilentlyContinue
+            }
 
             # Clear font cache files
             $fontCachePath = "$env:WINDIR\ServiceProfiles\LocalService\AppData\Local\FontCache"
             if (Test-Path $fontCachePath) {
                 Clear-DirectoryContents -Path $fontCachePath -Description "System font cache"
             }
-
-            # Restart font cache service
-            Start-Service -Name "FontCache" -ErrorAction SilentlyContinue
         }
         catch {
             Write-Debug "Font cache cleanup failed: $_"
-            Start-Service -Name "FontCache" -ErrorAction SilentlyContinue
+        }
+        finally {
+            # Restart font cache service if it was running
+            if ($wasRunning) {
+                Start-Service -Name "FontCache" -ErrorAction SilentlyContinue
+            }
         }
     }
 }

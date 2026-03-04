@@ -101,10 +101,11 @@ function Clear-RecycleBin {
         $items = $recycleBin.Items()
         
         if ($items.Count -gt 0) {
-            # Calculate size
+            # Calculate size using COM ExtendedProperty for Shell objects
             $totalSize = 0
             foreach ($item in $items) {
-                $totalSize += $item.Size
+                $size = $item.ExtendedProperty("Size")
+                if ($size) { $totalSize += $size }
             }
             
             # Clear using Clear-RecycleBin cmdlet (Windows 10+)
@@ -186,10 +187,10 @@ function Clear-ErrorReports {
     #>
     param([int]$DaysOld = 7)
     
+    # Note: $env:LOCALAPPDATA and $env:USERPROFILE\AppData\Local resolve to the same path
     $werPaths = @(
         "$env:LOCALAPPDATA\Microsoft\Windows\WER"
         "$env:LOCALAPPDATA\CrashDumps"
-        "$env:USERPROFILE\AppData\Local\Microsoft\Windows\WER"
     )
     
     foreach ($path in $werPaths) {
@@ -202,9 +203,8 @@ function Clear-ErrorReports {
         }
     }
     
-    # Memory dumps
+    # Memory dumps (only check user profile root for .dmp files, CrashDumps already handled above)
     $dumpPaths = @(
-        "$env:LOCALAPPDATA\CrashDumps"
         "$env:USERPROFILE\*.dmp"
     )
     

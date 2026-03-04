@@ -1,454 +1,741 @@
 # WinMole - Developer Tools Cleanup Module
-# Cleans development caches, build artifacts, and package manager caches
+# Cleans development tool caches and build artifacts
 
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
-# Import core
+# Prevent multiple sourcing
+if ((Get-Variable -Name 'WINMOLE_CLEAN_DEV_LOADED' -Scope Script -ErrorAction SilentlyContinue) -and $script:WINMOLE_CLEAN_DEV_LOADED) { return }
+$script:WINMOLE_CLEAN_DEV_LOADED = $true
+
+# Import dependencies
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$coreDir = Join-Path (Split-Path -Parent $scriptDir) "core"
-. "$coreDir\common.ps1"
+. "$scriptDir\..\core\base.ps1"
+. "$scriptDir\..\core\log.ps1"
+. "$scriptDir\..\core\file_ops.ps1"
 
 # ============================================================================
-# Node.js / npm / yarn / pnpm
+# Node.js / JavaScript Ecosystem
 # ============================================================================
 
-function Clear-NodeCache {
+function Clear-NpmCache {
     <#
     .SYNOPSIS
-        Clean Node.js related caches
+        Clean npm, pnpm, yarn, and bun caches
     #>
-    Start-Section "Node.js Caches"
     
     # npm cache
-    $npmCache = "$env:APPDATA\npm-cache"
-    if (Test-Path $npmCache) {
-        Clear-DirectoryContents -Path $npmCache -Description "npm cache"
-    }
-    
-    # Alternative npm cache location
-    $npmCacheAlt = "$env:LOCALAPPDATA\npm-cache"
-    if (Test-Path $npmCacheAlt) {
-        Clear-DirectoryContents -Path $npmCacheAlt -Description "npm cache (local)"
-    }
-    
-    # Yarn cache
-    $yarnCache = "$env:LOCALAPPDATA\Yarn\Cache"
-    if (Test-Path $yarnCache) {
-        Clear-DirectoryContents -Path $yarnCache -Description "Yarn cache"
-    }
-    
-    # Yarn v2+ cache
-    $yarn2Cache = "$env:LOCALAPPDATA\Yarn\Berry\cache"
-    if (Test-Path $yarn2Cache) {
-        Clear-DirectoryContents -Path $yarn2Cache -Description "Yarn Berry cache"
-    }
-    
-    # pnpm cache
-    $pnpmCache = "$env:LOCALAPPDATA\pnpm-cache"
-    if (Test-Path $pnpmCache) {
-        Clear-DirectoryContents -Path $pnpmCache -Description "pnpm cache"
-    }
-    
-    # pnpm store (be careful - this is where packages are stored)
-    $pnpmStore = "$env:LOCALAPPDATA\pnpm\store"
-    if (Test-Path $pnpmStore) {
-        Write-Info "pnpm store found at $pnpmStore - run 'pnpm store prune' to clean"
-    }
-    
-    Stop-Section
-}
-
-# ============================================================================
-# Python
-# ============================================================================
-
-function Clear-PythonCache {
-    <#
-    .SYNOPSIS
-        Clean Python related caches
-    #>
-    Start-Section "Python Caches"
-    
-    # pip cache
-    $pipCache = "$env:LOCALAPPDATA\pip\cache"
-    if (Test-Path $pipCache) {
-        Clear-DirectoryContents -Path $pipCache -Description "pip cache"
-    }
-    
-    # Alternative pip cache
-    $pipCacheAlt = "$env:APPDATA\pip\cache"
-    if (Test-Path $pipCacheAlt) {
-        Clear-DirectoryContents -Path $pipCacheAlt -Description "pip cache (roaming)"
-    }
-    
-    # pipx cache
-    $pipxCache = "$env:LOCALAPPDATA\pipx"
-    if (Test-Path "$pipxCache\.cache") {
-        Clear-DirectoryContents -Path "$pipxCache\.cache" -Description "pipx cache"
-    }
-    
-    # Poetry cache
-    $poetryCache = "$env:LOCALAPPDATA\pypoetry\Cache"
-    if (Test-Path $poetryCache) {
-        Clear-DirectoryContents -Path $poetryCache -Description "Poetry cache"
-    }
-    
-    # Conda pkgs (be careful - not cleaning everything)
-    $condaPkgs = "$env:USERPROFILE\.conda\pkgs"
-    if (Test-Path $condaPkgs) {
-        # Only clean .tar.bz2 and .conda files (compressed packages)
-        $compressedPkgs = Get-ChildItem -Path $condaPkgs -Filter "*.tar.bz2" -ErrorAction SilentlyContinue
-        $compressedPkgs += Get-ChildItem -Path $condaPkgs -Filter "*.conda" -ErrorAction SilentlyContinue
-        if ($compressedPkgs) {
-            Remove-SafeItems -Paths ($compressedPkgs | ForEach-Object { $_.FullName }) -Description "Conda package archives"
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        if (Test-DryRunMode) {
+            Write-DryRun "npm cache"
         }
-    }
-    
-    # __pycache__ in user directories (dangerous to scan everything, so just common locations)
-    $pythonDirs = @(
-        "$env:USERPROFILE\Documents"
-        "$env:USERPROFILE\Projects"
-        "$env:USERPROFILE\repos"
-        "$env:USERPROFILE\code"
-    )
-    
-    foreach ($dir in $pythonDirs) {
-        if (Test-Path $dir) {
-            $pycacheDirs = Get-ChildItem -Path $dir -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue | 
-                           Select-Object -First 100  # Limit to prevent long scans
-            if ($pycacheDirs) {
-                Remove-SafeItems -Paths ($pycacheDirs | ForEach-Object { $_.FullName }) -Description "__pycache__ dirs"
+        else {
+            try {
+                $null = npm cache clean --force 2>&1
+                Write-Success "npm cache"
+                Set-SectionActivity
+            }
+            catch {
+                Write-Debug "npm cache clean failed: $_"
             }
         }
     }
     
-    Stop-Section
+    # npm cache directory (fallback)
+    $npmCachePath = "$env:APPDATA\npm-cache"
+    if (Test-Path $npmCachePath) {
+        Clear-DirectoryContents -Path $npmCachePath -Description "npm cache directory"
+    }
+    
+    # pnpm store
+    $pnpmStorePath = "$env:LOCALAPPDATA\pnpm\store"
+    if (Test-Path $pnpmStorePath) {
+        if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+            if (Test-DryRunMode) {
+                Write-DryRun "pnpm store"
+            }
+            else {
+                try {
+                    $null = pnpm store prune 2>&1
+                    Write-Success "pnpm store pruned"
+                    Set-SectionActivity
+                }
+                catch {
+                    Write-Debug "pnpm store prune failed: $_"
+                }
+            }
+        }
+    }
+    
+    # Yarn cache
+    $yarnCachePaths = @(
+        "$env:LOCALAPPDATA\Yarn\Cache"
+        "$env:USERPROFILE\.yarn\cache"
+    )
+    foreach ($path in $yarnCachePaths) {
+        if (Test-Path $path) {
+            Clear-DirectoryContents -Path $path -Description "Yarn cache"
+        }
+    }
+    
+    # Bun cache
+    $bunCachePath = "$env:USERPROFILE\.bun\install\cache"
+    if (Test-Path $bunCachePath) {
+        Clear-DirectoryContents -Path $bunCachePath -Description "Bun cache"
+    }
+}
+
+function Clear-NodeBuildCaches {
+    <#
+    .SYNOPSIS
+        Clean Node.js build-related caches
+    #>
+    
+    # node-gyp
+    $nodeGypPath = "$env:LOCALAPPDATA\node-gyp\Cache"
+    if (Test-Path $nodeGypPath) {
+        Clear-DirectoryContents -Path $nodeGypPath -Description "node-gyp cache"
+    }
+    
+    # Electron cache
+    $electronCachePath = "$env:LOCALAPPDATA\electron\Cache"
+    if (Test-Path $electronCachePath) {
+        Clear-DirectoryContents -Path $electronCachePath -Description "Electron cache"
+    }
+    
+    # TypeScript cache
+    $tsCachePath = "$env:LOCALAPPDATA\TypeScript"
+    if (Test-Path $tsCachePath) {
+        Clear-DirectoryContents -Path $tsCachePath -Description "TypeScript cache"
+    }
 }
 
 # ============================================================================
-# .NET / NuGet
+# Python Ecosystem
 # ============================================================================
 
-function Clear-DotNetCache {
+function Clear-PythonCaches {
     <#
     .SYNOPSIS
-        Clean .NET related caches
+        Clean Python and pip caches
     #>
-    Start-Section ".NET Caches"
     
-    # NuGet HTTP cache
+    # pip cache
+    if (Get-Command pip -ErrorAction SilentlyContinue) {
+        if (Test-DryRunMode) {
+            Write-DryRun "pip cache"
+        }
+        else {
+            try {
+                $null = pip cache purge 2>&1
+                Write-Success "pip cache"
+                Set-SectionActivity
+            }
+            catch {
+                Write-Debug "pip cache purge failed: $_"
+            }
+        }
+    }
+    
+    # pip cache directory
+    $pipCachePath = "$env:LOCALAPPDATA\pip\Cache"
+    if (Test-Path $pipCachePath) {
+        Clear-DirectoryContents -Path $pipCachePath -Description "pip cache directory"
+    }
+    
+    # Python bytecode caches (__pycache__)
+    # Note: These are typically in project directories, cleaned by purge command
+    
+    # pyenv cache
+    $pyenvCachePath = "$env:USERPROFILE\.pyenv\cache"
+    if (Test-Path $pyenvCachePath) {
+        Clear-DirectoryContents -Path $pyenvCachePath -Description "pyenv cache"
+    }
+    
+    # Poetry cache
+    $poetryCachePath = "$env:LOCALAPPDATA\pypoetry\Cache"
+    if (Test-Path $poetryCachePath) {
+        Clear-DirectoryContents -Path $poetryCachePath -Description "Poetry cache"
+    }
+    
+    # conda packages
+    $condaCachePaths = @(
+        "$env:USERPROFILE\.conda\pkgs"
+        "$env:USERPROFILE\anaconda3\pkgs"
+        "$env:USERPROFILE\miniconda3\pkgs"
+    )
+    foreach ($path in $condaCachePaths) {
+        if (Test-Path $path) {
+            # Only clean index and temp files, not actual packages
+            $tempFiles = Get-ChildItem -Path $path -Filter "*.tmp" -ErrorAction SilentlyContinue
+            if ($tempFiles) {
+                $paths = $tempFiles | ForEach-Object { $_.FullName }
+                Remove-SafeItems -Paths $paths -Description "Conda temp files"
+            }
+        }
+    }
+    
+    # Jupyter runtime
+    $jupyterRuntimePath = "$env:APPDATA\jupyter\runtime"
+    if (Test-Path $jupyterRuntimePath) {
+        Clear-DirectoryContents -Path $jupyterRuntimePath -Description "Jupyter runtime"
+    }
+    
+    # pytest cache
+    $pytestCachePath = "$env:USERPROFILE\.pytest_cache"
+    if (Test-Path $pytestCachePath) {
+        Remove-SafeItem -Path $pytestCachePath -Description "pytest cache" -Recurse
+    }
+}
+
+# ============================================================================
+# .NET / C# Ecosystem
+# ============================================================================
+
+function Clear-DotNetDevCaches {
+    <#
+    .SYNOPSIS
+        Clean .NET development caches
+    #>
+    
+    # NuGet cache
+    $nugetCachePath = "$env:USERPROFILE\.nuget\packages"
+    # Don't clean packages by default - they're needed for builds
+    # Only clean http-cache and temp
+    
     $nugetHttpCache = "$env:LOCALAPPDATA\NuGet\v3-cache"
     if (Test-Path $nugetHttpCache) {
         Clear-DirectoryContents -Path $nugetHttpCache -Description "NuGet HTTP cache"
     }
     
-    # NuGet plugins cache
-    $nugetPlugins = "$env:LOCALAPPDATA\NuGet\plugins-cache"
-    if (Test-Path $nugetPlugins) {
-        Clear-DirectoryContents -Path $nugetPlugins -Description "NuGet plugins cache"
-    }
-    
-    # .NET SDK temp
-    $dotnetTemp = "$env:TEMP\NuGetScratch"
-    if (Test-Path $dotnetTemp) {
-        Clear-DirectoryContents -Path $dotnetTemp -Description "NuGet scratch"
+    $nugetTempPath = "$env:LOCALAPPDATA\NuGet\plugins-cache"
+    if (Test-Path $nugetTempPath) {
+        Clear-DirectoryContents -Path $nugetTempPath -Description "NuGet plugins cache"
     }
     
     # MSBuild temp files
     $msbuildTemp = "$env:LOCALAPPDATA\Microsoft\MSBuild"
     if (Test-Path $msbuildTemp) {
-        # Clean temp folders only
-        $tempDirs = Get-ChildItem -Path $msbuildTemp -Directory -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Name -match "^Tmp" }
+        $tempDirs = Get-ChildItem -Path $msbuildTemp -Directory -Filter "*temp*" -ErrorAction SilentlyContinue
         foreach ($dir in $tempDirs) {
             Clear-DirectoryContents -Path $dir.FullName -Description "MSBuild temp"
         }
     }
-    
-    # Note: Not cleaning ~/.nuget/packages by default as it's the package cache
-    $nugetPackages = "$env:USERPROFILE\.nuget\packages"
-    if (Test-Path $nugetPackages) {
-        Write-Info "NuGet packages at $nugetPackages - run 'dotnet nuget locals all --clear' to clean"
-    }
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Rust / Cargo
+# Go Ecosystem
 # ============================================================================
 
-function Clear-RustCache {
+function Clear-GoCaches {
+    <#
+    .SYNOPSIS
+        Clean Go build and module caches
+    #>
+    
+    if (Get-Command go -ErrorAction SilentlyContinue) {
+        if (Test-DryRunMode) {
+            Write-DryRun "Go cache"
+        }
+        else {
+            try {
+                $null = go clean -cache 2>&1
+                Write-Success "Go build cache"
+                Set-SectionActivity
+            }
+            catch {
+                Write-Debug "go clean -cache failed: $_"
+            }
+        }
+    }
+    
+    # Go module cache
+    $goModCachePath = "$env:GOPATH\pkg\mod\cache"
+    if (-not $env:GOPATH) {
+        $goModCachePath = "$env:USERPROFILE\go\pkg\mod\cache"
+    }
+    if (Test-Path $goModCachePath) {
+        Clear-DirectoryContents -Path $goModCachePath -Description "Go module cache"
+    }
+}
+
+# ============================================================================
+# Rust Ecosystem
+# ============================================================================
+
+function Clear-RustCaches {
     <#
     .SYNOPSIS
         Clean Rust/Cargo caches
     #>
-    Start-Section "Rust Caches"
     
-    # Cargo registry cache (index only, not the actual crates)
-    $cargoRegistry = "$env:USERPROFILE\.cargo\registry\cache"
-    if (Test-Path $cargoRegistry) {
-        # Only clean old cached .crate files
-        Remove-OldFiles -Path $cargoRegistry -DaysOld 60 -Filter "*.crate" -Description "Cargo crate cache"
+    # Cargo registry cache
+    $cargoRegistryCache = "$env:USERPROFILE\.cargo\registry\cache"
+    if (Test-Path $cargoRegistryCache) {
+        Clear-DirectoryContents -Path $cargoRegistryCache -Description "Cargo registry cache"
     }
     
-    # Cargo git checkouts (temporary)
-    $cargoGit = "$env:USERPROFILE\.cargo\git\checkouts"
-    if (Test-Path $cargoGit) {
-        Write-Info "Cargo git checkouts found - run 'cargo cache --autoclean' if cargo-cache is installed"
+    # Cargo git cache
+    $cargoGitCache = "$env:USERPROFILE\.cargo\git\checkouts"
+    if (Test-Path $cargoGitCache) {
+        Clear-DirectoryContents -Path $cargoGitCache -Description "Cargo git cache"
     }
     
-    # rustup downloads
+    # Rustup downloads
     $rustupDownloads = "$env:USERPROFILE\.rustup\downloads"
     if (Test-Path $rustupDownloads) {
         Clear-DirectoryContents -Path $rustupDownloads -Description "Rustup downloads"
     }
-    
-    # rustup tmp
-    $rustupTmp = "$env:USERPROFILE\.rustup\tmp"
-    if (Test-Path $rustupTmp) {
-        Clear-DirectoryContents -Path $rustupTmp -Description "Rustup temp"
-    }
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Go
+# Java / JVM Ecosystem
 # ============================================================================
 
-function Clear-GoCache {
+function Clear-JvmCaches {
     <#
     .SYNOPSIS
-        Clean Go caches
+        Clean JVM ecosystem caches (Gradle, Maven, etc.)
     #>
-    Start-Section "Go Caches"
     
-    # Go build cache
-    $goBuildCache = "$env:LOCALAPPDATA\go-build"
-    if (Test-Path $goBuildCache) {
-        Clear-DirectoryContents -Path $goBuildCache -Description "Go build cache"
-    }
-    
-    # Go mod cache (be careful)
-    $goModCache = "$env:GOPATH\pkg\mod\cache"
-    if (-not $env:GOPATH) {
-        $goModCache = "$env:USERPROFILE\go\pkg\mod\cache"
-    }
-    if (Test-Path $goModCache) {
-        # Only clean download cache
-        $downloadCache = Join-Path $goModCache "download"
-        if (Test-Path $downloadCache) {
-            Write-Info "Go mod cache found - run 'go clean -modcache' to clean completely"
+    # Gradle caches
+    $gradleCachePaths = @(
+        "$env:USERPROFILE\.gradle\caches"
+        "$env:USERPROFILE\.gradle\daemon"
+        "$env:USERPROFILE\.gradle\wrapper\dists"
+    )
+    foreach ($path in $gradleCachePaths) {
+        if (Test-Path $path) {
+            # Only clean temp and old daemon logs
+            $tempFiles = Get-ChildItem -Path $path -Recurse -Filter "*.lock" -ErrorAction SilentlyContinue
+            if ($tempFiles) {
+                $paths = $tempFiles | ForEach-Object { $_.FullName }
+                Remove-SafeItems -Paths $paths -Description "Gradle lock files"
+            }
         }
     }
     
-    Stop-Section
-}
-
-# ============================================================================
-# Java / Maven / Gradle
-# ============================================================================
-
-function Clear-JavaCache {
-    <#
-    .SYNOPSIS
-        Clean Java related caches
-    #>
-    Start-Section "Java Caches"
-    
-    # Note: NOT cleaning .m2/repository as it contains all Maven dependencies
-    Write-Info "Maven repo at ~/.m2/repository - clean manually if needed"
-    
-    # Gradle wrapper distributions (old versions)
-    $gradleWrapper = "$env:USERPROFILE\.gradle\wrapper\dists"
-    if (Test-Path $gradleWrapper) {
-        # Keep only the 3 most recent versions
-        $gradleDists = Get-ChildItem -Path $gradleWrapper -Directory -ErrorAction SilentlyContinue |
-                       Sort-Object LastWriteTime -Descending |
-                       Select-Object -Skip 3
-        if ($gradleDists) {
-            Remove-SafeItems -Paths ($gradleDists | ForEach-Object { $_.FullName }) -Description "Old Gradle distributions"
+    # Maven repository (only clean temp files)
+    $mavenRepoPath = "$env:USERPROFILE\.m2\repository"
+    if (Test-Path $mavenRepoPath) {
+        $tempFiles = Get-ChildItem -Path $mavenRepoPath -Recurse -Filter "*.lastUpdated" -ErrorAction SilentlyContinue
+        if ($tempFiles) {
+            $paths = $tempFiles | ForEach-Object { $_.FullName }
+            Remove-SafeItems -Paths $paths -Description "Maven update markers"
         }
     }
-    
-    # Gradle build cache
-    $gradleBuildCache = "$env:USERPROFILE\.gradle\caches\build-cache-1"
-    if (Test-Path $gradleBuildCache) {
-        Clear-DirectoryContents -Path $gradleBuildCache -Description "Gradle build cache"
-    }
-    
-    # Gradle daemon logs
-    $gradleDaemon = "$env:USERPROFILE\.gradle\daemon"
-    if (Test-Path $gradleDaemon) {
-        Remove-OldFiles -Path $gradleDaemon -DaysOld 7 -Filter "*.log" -Description "Gradle daemon logs"
-    }
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Docker
+# Docker / Containers
 # ============================================================================
 
-function Clear-DockerCache {
+function Clear-DockerCaches {
     <#
     .SYNOPSIS
-        Clean Docker caches and build files
+        Clean Docker build caches and unused data
     #>
-    Start-Section "Docker"
     
-    # Check if Docker is installed and running
-    $docker = Get-Command docker -ErrorAction SilentlyContinue
-    if (-not $docker) {
-        Write-Debug "Docker not installed"
-        Stop-Section
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         return
     }
     
     # Check if Docker daemon is running
-    $dockerRunning = docker info 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Docker daemon is not running"
-        Stop-Section
-        return
+    $dockerRunning = $false
+    try {
+        $null = docker info 2>&1
+        $dockerRunning = $true
+    }
+    catch {
+        Write-Debug "Docker daemon not running"
     }
     
-    if (Test-DryRunMode) {
-        Write-DryRun "Docker system prune would clean unused data"
-    }
-    else {
-        Write-Info "Run 'docker system prune -a' to clean unused images and containers"
-        Write-Info "Run 'docker builder prune' to clean build cache"
+    if ($dockerRunning) {
+        if (Test-DryRunMode) {
+            Write-DryRun "Docker build cache"
+        }
+        else {
+            try {
+                $null = docker builder prune -af 2>&1
+                Write-Success "Docker build cache"
+                Set-SectionActivity
+            }
+            catch {
+                Write-Debug "docker builder prune failed: $_"
+            }
+        }
     }
     
-    Stop-Section
+    # Docker Desktop cache (Windows)
+    $dockerDesktopCache = "$env:LOCALAPPDATA\Docker\wsl\data"
+    # Note: Don't clean this - it's the WSL2 virtual disk
+}
+
+# ============================================================================
+# Cloud CLI Tools
+# ============================================================================
+
+function Clear-CloudCliCaches {
+    <#
+    .SYNOPSIS
+        Clean cloud CLI tool caches (AWS, Azure, GCP)
+    #>
+    
+    # AWS CLI cache
+    $awsCachePath = "$env:USERPROFILE\.aws\cli\cache"
+    if (Test-Path $awsCachePath) {
+        Clear-DirectoryContents -Path $awsCachePath -Description "AWS CLI cache"
+    }
+    
+    # Azure CLI logs
+    $azureLogsPath = "$env:USERPROFILE\.azure\logs"
+    if (Test-Path $azureLogsPath) {
+        Clear-DirectoryContents -Path $azureLogsPath -Description "Azure CLI logs"
+    }
+    
+    # Google Cloud logs
+    $gcloudLogsPath = "$env:APPDATA\gcloud\logs"
+    if (Test-Path $gcloudLogsPath) {
+        Clear-DirectoryContents -Path $gcloudLogsPath -Description "gcloud logs"
+    }
+    
+    # Kubernetes cache
+    $kubeCachePath = "$env:USERPROFILE\.kube\cache"
+    if (Test-Path $kubeCachePath) {
+        Clear-DirectoryContents -Path $kubeCachePath -Description "Kubernetes cache"
+    }
+    
+    # Terraform plugin cache
+    $terraformCachePath = "$env:APPDATA\terraform.d\plugin-cache"
+    if (Test-Path $terraformCachePath) {
+        Clear-DirectoryContents -Path $terraformCachePath -Description "Terraform plugin cache"
+    }
+}
+
+# ============================================================================
+# Elixir/Erlang Ecosystem
+# ============================================================================
+
+function Clear-ElixirCaches {
+    <#
+    .SYNOPSIS
+        Clean Elixir Mix and Hex caches
+    #>
+    
+    # Mix archives - skip auto-cleanup to preserve globally installed Mix tools
+    # NOTE: This directory contains globally installed Mix tools and tasks (e.g., phx_new, hex).
+    # Clearing it would remove user-installed tools requiring reinstallation.
+    $mixArchivesPath = "$env:USERPROFILE\.mix\archives"
+    if (Test-Path $mixArchivesPath) {
+        Write-Debug "Skipping Mix archives at '$mixArchivesPath' - contains globally installed tools"
+    }
+    
+    # Hex cache
+    $hexCachePath = "$env:USERPROFILE\.hex\cache"
+    if (Test-Path $hexCachePath) {
+        Clear-DirectoryContents -Path $hexCachePath -Description "Hex cache"
+    }
+    
+    # Hex packages - use age-based cleanup to preserve actively used packages
+    $hexPackagesPath = "$env:USERPROFILE\.hex\packages"
+    if (Test-Path $hexPackagesPath) {
+        $cutoffDate = (Get-Date).AddDays(-90)
+        $oldHexPackages = Get-ChildItem -Path $hexPackagesPath -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $cutoffDate }
+        if ($oldHexPackages) {
+            foreach ($pkg in $oldHexPackages) {
+                Remove-SafeItem -Path $pkg.FullName -Description "Old Hex package ($($pkg.Name))" -Recurse
+            }
+        }
+    }
+}
+
+# ============================================================================
+# Haskell Ecosystem
+# ============================================================================
+
+function Clear-HaskellCaches {
+    <#
+    .SYNOPSIS
+        Clean Haskell Cabal and Stack caches
+    #>
+    
+    # Cabal packages cache - use age-based cleanup to preserve recently used packages
+    $cabalPackagesPath = "$env:USERPROFILE\.cabal\packages"
+    if (Test-Path $cabalPackagesPath) {
+        $cutoffDate = (Get-Date).AddDays(-90)
+        $oldCacheItems = Get-ChildItem -Path $cabalPackagesPath -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $cutoffDate }
+        if ($oldCacheItems) {
+            $paths = $oldCacheItems | ForEach-Object { $_.FullName }
+            Remove-SafeItems -Paths $paths -Description "Cabal old packages cache"
+        }
+    }
+    
+    # Cabal store
+    $cabalStorePath = "$env:USERPROFILE\.cabal\store"
+    if (Test-Path $cabalStorePath) {
+        # Only clean old/unused packages - be careful here
+        $oldDirs = Get-ChildItem -Path $cabalStorePath -Directory -ErrorAction SilentlyContinue |
+                   Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-90) }
+        if ($oldDirs) {
+            foreach ($dir in $oldDirs) {
+                Remove-SafeItem -Path $dir.FullName -Description "Cabal old store ($($dir.Name))" -Recurse
+            }
+        }
+    }
+    
+    # Stack programs cache - use age-based cleanup (contains GHC installations)
+    # These can be large and time-consuming to re-download
+    $stackProgramsPath = "$env:USERPROFILE\.stack\programs"
+    if (Test-Path $stackProgramsPath) {
+        $cutoffDate = (Get-Date).AddDays(-90)
+        $oldProgramDirs = Get-ChildItem -Path $stackProgramsPath -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $cutoffDate }
+        if ($oldProgramDirs) {
+            foreach ($dir in $oldProgramDirs) {
+                Remove-SafeItem -Path $dir.FullName -Description "Stack old program ($($dir.Name))" -Recurse
+            }
+        }
+    }
+    
+    # Stack snapshots (be careful - these are needed for builds)
+    $stackSnapshotsPath = "$env:USERPROFILE\.stack\snapshots"
+    if (Test-Path $stackSnapshotsPath) {
+        # Only clean temp files
+        $tempFiles = Get-ChildItem -Path $stackSnapshotsPath -Recurse -Filter "*.tmp" -ErrorAction SilentlyContinue
+        if ($tempFiles) {
+            $paths = $tempFiles | ForEach-Object { $_.FullName }
+            Remove-SafeItems -Paths $paths -Description "Stack temp files"
+        }
+    }
+}
+
+# ============================================================================
+# OCaml Ecosystem
+# ============================================================================
+
+function Clear-OCamlCaches {
+    <#
+    .SYNOPSIS
+        Clean OCaml Opam caches
+    #>
+    
+    # Opam download cache
+    $opamDownloadCache = "$env:USERPROFILE\.opam\download-cache"
+    if (Test-Path $opamDownloadCache) {
+        Clear-DirectoryContents -Path $opamDownloadCache -Description "Opam download cache"
+    }
+    
+    # Opam repo cache
+    $opamRepoCache = "$env:USERPROFILE\.opam\repo"
+    if (Test-Path $opamRepoCache) {
+        $cacheDirs = Get-ChildItem -Path $opamRepoCache -Directory -Filter "*cache*" -ErrorAction SilentlyContinue
+        foreach ($dir in $cacheDirs) {
+            Clear-DirectoryContents -Path $dir.FullName -Description "Opam repo cache"
+        }
+    }
+}
+
+# ============================================================================
+# Editor Caches (VS Code, Zed, etc.)
+# ============================================================================
+
+function Clear-EditorCaches {
+    <#
+    .SYNOPSIS
+        Clean VS Code, Zed, and other editor caches
+    #>
+    
+    # VS Code cached data
+    # NOTE: workspaceStorage excluded - contains workspace-specific settings and extension data
+    $vscodeCachePaths = @(
+        "$env:APPDATA\Code\Cache"
+        "$env:APPDATA\Code\CachedData"
+        "$env:APPDATA\Code\CachedExtensions"
+        "$env:APPDATA\Code\CachedExtensionVSIXs"
+        "$env:APPDATA\Code\Code Cache"
+        "$env:APPDATA\Code\GPUCache"
+        "$env:LOCALAPPDATA\Microsoft\vscode-cpptools"
+    )
+    foreach ($path in $vscodeCachePaths) {
+        if (Test-Path $path) {
+            Clear-DirectoryContents -Path $path -Description "VS Code cache"
+        }
+    }
+    
+    # VS Code Insiders
+    # NOTE: workspaceStorage excluded - contains workspace-specific settings and extension data
+    $vscodeInsidersCachePaths = @(
+        "$env:APPDATA\Code - Insiders\Cache"
+        "$env:APPDATA\Code - Insiders\CachedData"
+        "$env:APPDATA\Code - Insiders\CachedExtensions"
+        "$env:APPDATA\Code - Insiders\CachedExtensionVSIXs"
+        "$env:APPDATA\Code - Insiders\Code Cache"
+        "$env:APPDATA\Code - Insiders\GPUCache"
+    )
+    foreach ($path in $vscodeInsidersCachePaths) {
+        if (Test-Path $path) {
+            Clear-DirectoryContents -Path $path -Description "VS Code Insiders cache"
+        }
+    }
+    
+    # Zed editor cache
+    $zedCachePaths = @(
+        "$env:LOCALAPPDATA\Zed\cache"
+        "$env:APPDATA\Zed\cache"
+    )
+    foreach ($path in $zedCachePaths) {
+        if (Test-Path $path) {
+            Clear-DirectoryContents -Path $path -Description "Zed cache"
+        }
+    }
+    
+    # Sublime Text cache
+    $sublimeCachePath = "$env:APPDATA\Sublime Text\Cache"
+    if (Test-Path $sublimeCachePath) {
+        Clear-DirectoryContents -Path $sublimeCachePath -Description "Sublime Text cache"
+    }
+    
+    # Atom cache (legacy)
+    $atomCachePath = "$env:APPDATA\.atom\compile-cache"
+    if (Test-Path $atomCachePath) {
+        Clear-DirectoryContents -Path $atomCachePath -Description "Atom compile cache"
+    }
 }
 
 # ============================================================================
 # IDE Caches
 # ============================================================================
 
-function Clear-IDECaches {
+function Clear-IdeCaches {
     <#
     .SYNOPSIS
-        Clean IDE and editor caches
+        Clean IDE caches (VS, VSCode, JetBrains, etc.)
     #>
-    Start-Section "IDE Caches"
     
-    # Visual Studio
-    $vsCache = "$env:LOCALAPPDATA\Microsoft\VisualStudio"
-    if (Test-Path $vsCache) {
-        $vsCacheDirs = Get-ChildItem -Path $vsCache -Directory -ErrorAction SilentlyContinue |
-                       ForEach-Object { 
-                           $componentCache = Join-Path $_.FullName "ComponentModelCache"
-                           if (Test-Path $componentCache) { $componentCache }
-                       }
-        foreach ($dir in $vsCacheDirs) {
-            Clear-DirectoryContents -Path $dir -Description "Visual Studio component cache"
-        }
-    }
-    
-    # JetBrains IDEs
-    $jetbrainsConfigs = @(
-        "$env:APPDATA\JetBrains"
-        "$env:LOCALAPPDATA\JetBrains"
+    # Visual Studio cache
+    $vsCachePaths = @(
+        "$env:LOCALAPPDATA\Microsoft\VisualStudio\*\ComponentModelCache"
+        "$env:LOCALAPPDATA\Microsoft\VisualStudio\*\ImageCache"
     )
-    foreach ($config in $jetbrainsConfigs) {
-        if (Test-Path $config) {
-            $logDirs = Get-ChildItem -Path $config -Directory -Recurse -ErrorAction SilentlyContinue |
-                       Where-Object { $_.Name -eq "log" }
-            foreach ($dir in $logDirs) {
-                Remove-OldFiles -Path $dir.FullName -DaysOld 7 -Description "JetBrains logs"
+    foreach ($pattern in $vsCachePaths) {
+        $paths = Resolve-Path $pattern -ErrorAction SilentlyContinue
+        foreach ($path in $paths) {
+            if (Test-Path $path.Path) {
+                Clear-DirectoryContents -Path $path.Path -Description "Visual Studio cache"
             }
         }
     }
     
-    # VS Code (already handled in user.ps1 but adding workspace storage here)
-    $vscodeStorage = "$env:APPDATA\Code\User\workspaceStorage"
-    if (Test-Path $vscodeStorage) {
-        # Clean workspace storage older than 30 days
-        $oldWorkspaces = Get-ChildItem -Path $vscodeStorage -Directory -ErrorAction SilentlyContinue |
-                         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) }
-        if ($oldWorkspaces) {
-            Remove-SafeItems -Paths ($oldWorkspaces | ForEach-Object { $_.FullName }) -Description "VS Code old workspaces"
+    # JetBrains IDEs caches
+    $jetbrainsBasePaths = @(
+        "$env:LOCALAPPDATA\JetBrains"
+        "$env:APPDATA\JetBrains"
+    )
+    foreach ($basePath in $jetbrainsBasePaths) {
+        if (Test-Path $basePath) {
+            $ideFolders = Get-ChildItem -Path $basePath -Directory -ErrorAction SilentlyContinue
+            foreach ($ideFolder in $ideFolders) {
+                $cacheFolders = @("caches", "index", "tmp")
+                foreach ($cacheFolder in $cacheFolders) {
+                    $cachePath = Join-Path $ideFolder.FullName $cacheFolder
+                    if (Test-Path $cachePath) {
+                        Clear-DirectoryContents -Path $cachePath -Description "$($ideFolder.Name) $cacheFolder"
+                    }
+                }
+            }
         }
     }
-    
-    # Sublime Text cache
-    $sublimeCache = "$env:APPDATA\Sublime Text\Cache"
-    if (Test-Path $sublimeCache) {
-        Clear-DirectoryContents -Path $sublimeCache -Description "Sublime Text cache"
-    }
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Git
+# Git Caches
 # ============================================================================
 
-function Clear-GitCache {
+function Clear-GitCaches {
     <#
     .SYNOPSIS
-        Clean Git related caches
+        Clean Git temporary files and lock files
     #>
-    Start-Section "Git"
     
-    # Git credential cache (not touching - security sensitive)
-    
-    # Git pack files optimization suggestion
-    Write-Info "Run 'git gc --aggressive' in repositories to optimize Git objects"
+    # Git config locks (stale)
+    $gitConfigLock = "$env:USERPROFILE\.gitconfig.lock"
+    if (Test-Path $gitConfigLock) {
+        Remove-SafeItem -Path $gitConfigLock -Description "Git config lock"
+    }
     
     # GitHub CLI cache
-    $ghCache = "$env:APPDATA\GitHub CLI"
-    if (Test-Path $ghCache) {
-        Remove-OldFiles -Path $ghCache -DaysOld 30 -Filter "*.json" -Description "GitHub CLI cache"
+    $ghCachePath = "$env:APPDATA\GitHub CLI"
+    if (Test-Path $ghCachePath) {
+        $cacheFiles = Get-ChildItem -Path $ghCachePath -Filter "*.json" -ErrorAction SilentlyContinue |
+                      Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) }
+        if ($cacheFiles) {
+            $paths = $cacheFiles | ForEach-Object { $_.FullName }
+            Remove-SafeItems -Paths $paths -Description "GitHub CLI cache"
+        }
     }
+}
+
+# ============================================================================
+# Main Developer Tools Cleanup Function
+# ============================================================================
+
+function Invoke-DevToolsCleanup {
+    <#
+    .SYNOPSIS
+        Run all developer tools cleanup tasks
+    #>
+    
+    Start-Section "Developer tools"
+    
+    # JavaScript ecosystem
+    Clear-NpmCache
+    Clear-NodeBuildCaches
+    
+    # Python ecosystem
+    Clear-PythonCaches
+    
+    # .NET ecosystem
+    Clear-DotNetDevCaches
+    
+    # Go ecosystem
+    Clear-GoCaches
+    
+    # Rust ecosystem
+    Clear-RustCaches
+    
+    # JVM ecosystem
+    Clear-JvmCaches
+    
+    # Elixir/Erlang ecosystem
+    Clear-ElixirCaches
+    
+    # Haskell ecosystem
+    Clear-HaskellCaches
+    
+    # OCaml ecosystem
+    Clear-OCamlCaches
+    
+    # Containers
+    Clear-DockerCaches
+    
+    # Cloud CLI tools
+    Clear-CloudCliCaches
+    
+    # Editor caches (VS Code, Zed, etc.)
+    Clear-EditorCaches
+    
+    # IDEs (JetBrains, Visual Studio)
+    Clear-IdeCaches
+    
+    # Git
+    Clear-GitCaches
     
     Stop-Section
 }
 
 # ============================================================================
-# Main Developer Cleanup
+# Exports
 # ============================================================================
-
-function Invoke-DevCleanup {
-    <#
-    .SYNOPSIS
-        Run all developer tools cleanup
-    #>
-    param(
-        [switch]$Node,
-        [switch]$Python,
-        [switch]$DotNet,
-        [switch]$Rust,
-        [switch]$Go,
-        [switch]$Java,
-        [switch]$Docker,
-        [switch]$IDE,
-        [switch]$Git,
-        [switch]$All
-    )
-    
-    Reset-CleanupStats
-    
-    if ($All -or $Node) { Clear-NodeCache }
-    if ($All -or $Python) { Clear-PythonCache }
-    if ($All -or $DotNet) { Clear-DotNetCache }
-    if ($All -or $Rust) { Clear-RustCache }
-    if ($All -or $Go) { Clear-GoCache }
-    if ($All -or $Java) { Clear-JavaCache }
-    if ($All -or $Docker) { Clear-DockerCache }
-    if ($All -or $IDE) { Clear-IDECaches }
-    if ($All -or $Git) { Clear-GitCache }
-    
-    $stats = Get-CleanupStats
-    Show-Summary -SizeBytes ($stats.TotalSizeKB * 1024) -ItemCount $stats.TotalItems -Action "Cleaned"
-}
-
-# ============================================================================
-# Exports (functions are available via dot-sourcing)
-# ============================================================================
-# Functions: Clear-NodeCache, Clear-PythonCache, Invoke-DevCleanup, etc.
+# Functions: Clear-NpmCache, Clear-PythonCaches, Clear-DockerCaches, etc.

@@ -12,6 +12,10 @@ param(
     [switch]$System,
     [switch]$RecycleBin,
     [switch]$WindowsUpdate,
+    [switch]$Caches,
+    [switch]$GPUShaders,
+    [switch]$GameMedia,
+    [switch]$Orphaned,
     [switch]$Help
 )
 
@@ -25,6 +29,8 @@ $libDir = Join-Path (Split-Path -Parent $scriptDir) "lib"
 # Import modules
 . "$libDir\core\common.ps1"
 . "$libDir\clean\user.ps1"
+. "$libDir\clean\caches.ps1"
+. "$libDir\clean\apps.ps1"
 . "$libDir\clean\dev.ps1"
 . "$libDir\clean\system.ps1"
 
@@ -49,10 +55,14 @@ function Show-CleanHelp {
     Write-Host "    -User           Clean user caches and temp files"
     Write-Host "    -Browsers       Clean browser caches"
     Write-Host "    -Apps           Clean application caches"
+    Write-Host "    -Caches         Clean system and app caches (Store, .NET, GPU)"
+    Write-Host "    -GPUShaders     Clean GPU shader caches (NVIDIA, AMD, Intel)"
     Write-Host "    -Dev            Clean developer tool caches"
     Write-Host "    -System         Clean system caches (requires admin)"
     Write-Host "    -RecycleBin     Empty Recycle Bin"
     Write-Host "    -WindowsUpdate  Clean Windows Update cache (requires admin)"
+    Write-Host "    -GameMedia      Clean old game recordings and screenshots"
+    Write-Host "    -Orphaned       Detect and clean orphaned app data"
     Write-Host "    -Help           Show this help"
     Write-Host ""
     Write-Host "  ${gray}EXAMPLES:${nc}"
@@ -60,6 +70,8 @@ function Show-CleanHelp {
     Write-Host "    winmole clean -All               # Full cleanup"
     Write-Host "    winmole clean -User -Browsers    # User + Browser cleanup"
     Write-Host "    winmole clean -All -DryRun       # Preview all changes"
+    Write-Host "    winmole clean -Caches -GPUShaders  # Deep cache cleanup"
+    Write-Host "    winmole clean -GameMedia          # Clean old game media"
     Write-Host ""
 }
 
@@ -72,8 +84,11 @@ function Show-CleanMenu {
         @{ Name = "Quick Clean"; Description = "User caches and temp files"; Action = "quick" }
         @{ Name = "Browser Clean"; Description = "All browser caches"; Action = "browsers" }
         @{ Name = "App Clean"; Description = "Application caches"; Action = "apps" }
+        @{ Name = "Cache Clean"; Description = "System, Store, .NET, GPU shader caches"; Action = "caches" }
         @{ Name = "Developer Clean"; Description = "Dev tool caches (npm, pip, etc.)"; Action = "dev" }
         @{ Name = "System Clean"; Description = "System caches (requires admin)"; Action = "system" }
+        @{ Name = "Game Media Clean"; Description = "Old recordings, screenshots, replays"; Action = "gamemedia" }
+        @{ Name = "Orphaned Apps"; Description = "Detect leftover data from uninstalled apps"; Action = "orphaned" }
         @{ Name = "Full Clean"; Description = "Everything above"; Action = "all" }
     )
     
@@ -109,20 +124,24 @@ function Main {
     if ($DryRun -or $env:WINMOLE_DRY_RUN -eq "1") {
         Set-DryRunMode -Enabled $true
         Write-Host ""
-        Write-Warning "DRY RUN MODE - No files will be deleted"
+        Write-WinMoleWarning "DRY RUN MODE - No files will be deleted"
     }
     
     # Determine what to clean
     $cleanUser = $false
     $cleanBrowsers = $false
     $cleanApps = $false
+    $cleanCaches = $false
+    $cleanGPUShaders = $false
     $cleanDev = $false
     $cleanSystem = $false
     $cleanRecycleBin = $false
     $cleanWinUpdate = $false
+    $cleanGameMedia = $false
+    $cleanOrphaned = $false
     
     # If no flags specified, run interactive mode
-    $noFlags = -not ($All -or $User -or $Browsers -or $Apps -or $Dev -or $System -or $RecycleBin -or $WindowsUpdate)
+    $noFlags = -not ($All -or $User -or $Browsers -or $Apps -or $Caches -or $GPUShaders -or $Dev -or $System -or $RecycleBin -or $WindowsUpdate -or $GameMedia -or $Orphaned)
     
     if ($noFlags) {
         Clear-Host
@@ -139,15 +158,22 @@ function Main {
             "quick" { $cleanUser = $true }
             "browsers" { $cleanBrowsers = $true }
             "apps" { $cleanApps = $true }
+            "caches" { $cleanCaches = $true; $cleanGPUShaders = $true }
             "dev" { $cleanDev = $true }
             "system" { $cleanSystem = $true }
+            "gamemedia" { $cleanGameMedia = $true }
+            "orphaned" { $cleanOrphaned = $true }
             "all" { 
                 $cleanUser = $true
                 $cleanBrowsers = $true
                 $cleanApps = $true
+                $cleanCaches = $true
+                $cleanGPUShaders = $true
                 $cleanDev = $true
                 $cleanSystem = $true
                 $cleanRecycleBin = $true
+                $cleanGameMedia = $true
+                $cleanOrphaned = $true
             }
         }
         
@@ -165,19 +191,27 @@ function Main {
             $cleanUser = $true
             $cleanBrowsers = $true
             $cleanApps = $true
+            $cleanCaches = $true
+            $cleanGPUShaders = $true
             $cleanDev = $true
             $cleanSystem = $true
             $cleanRecycleBin = $true
             $cleanWinUpdate = $true
+            $cleanGameMedia = $true
+            $cleanOrphaned = $true
         }
         else {
             $cleanUser = $User
             $cleanBrowsers = $Browsers
             $cleanApps = $Apps
+            $cleanCaches = $Caches
+            $cleanGPUShaders = $GPUShaders
             $cleanDev = $Dev
             $cleanSystem = $System
             $cleanRecycleBin = $RecycleBin
             $cleanWinUpdate = $WindowsUpdate
+            $cleanGameMedia = $GameMedia
+            $cleanOrphaned = $Orphaned
         }
     }
     
@@ -198,6 +232,22 @@ function Main {
     
     if ($cleanApps) {
         Clear-ApplicationCaches
+        # Extended app cleanup: productivity, creative, gaming platform caches
+        Invoke-AppCleanup
+    }
+    
+    if ($cleanCaches) {
+        Clear-CommonAppCaches
+        Clear-StoreAppCaches
+        Clear-DotNetCaches
+        if (Test-IsAdmin) {
+            Clear-DeliveryOptimizationCache
+            Clear-FontCache
+        }
+    }
+    
+    if ($cleanGPUShaders) {
+        Clear-GPUShaderCaches
     }
     
     if ($cleanDev) {
@@ -209,7 +259,7 @@ function Main {
             Invoke-SystemCleanup -All
         }
         else {
-            Write-Warning "System cleanup requires admin - skipping"
+            Write-WinMoleWarning "System cleanup requires admin - skipping"
             Write-Info "Run 'winmole clean -System' as Administrator"
         }
     }
@@ -223,8 +273,16 @@ function Main {
             Clear-WindowsUpdateCache
         }
         else {
-            Write-Warning "Windows Update cleanup requires admin - skipping"
+            Write-WinMoleWarning "Windows Update cleanup requires admin - skipping"
         }
+    }
+    
+    if ($cleanGameMedia) {
+        Clear-GameMediaFiles -DaysOld 90
+    }
+    
+    if ($cleanOrphaned) {
+        Clear-OrphanedAppData -DaysOld 60
     }
     
     # Clean empty directories

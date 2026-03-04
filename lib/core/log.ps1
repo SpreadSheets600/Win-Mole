@@ -12,6 +12,46 @@ $script:WINMOLE_LOG_LOADED = $true
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\base.ps1"
 
+# Fallbacks in case base.ps1 did not initialize icons/colors in this scope
+if (-not ($script:Icons -is [hashtable])) {
+    $script:Icons = @{}
+}
+
+$iconDefaults = @{
+    List    = "*"
+    Success = "+"
+    Warning = "!"
+    Error   = "x"
+    DryRun  = ">"
+    Arrow   = ">"
+}
+
+foreach ($key in $iconDefaults.Keys) {
+    if (-not $script:Icons.ContainsKey($key)) {
+        $script:Icons[$key] = $iconDefaults[$key]
+    }
+}
+
+if (-not ($script:Colors -is [hashtable])) {
+    $script:Colors = @{}
+}
+
+$colorDefaults = @{
+    Cyan       = ""
+    Green      = ""
+    Yellow     = ""
+    Red        = ""
+    Gray       = ""
+    PurpleBold = ""
+    NC         = ""
+}
+
+foreach ($key in $colorDefaults.Keys) {
+    if (-not $script:Colors.ContainsKey($key)) {
+        $script:Colors[$key] = $colorDefaults[$key]
+    }
+}
+
 # ============================================================================
 # Log Configuration
 # ============================================================================
@@ -71,19 +111,19 @@ function Write-Success {
     Write-LogMessage -Message $Message -Level "SUCCESS" -Color "Green" -Icon $script:Icons.Success
 }
 
-function Write-Warning {
+function Write-WinMoleWarning {
     <#
     .SYNOPSIS
-        Write a warning message
+        Write a warning message (named to avoid conflict with built-in Write-Warning cmdlet)
     #>
     param([string]$Message)
     Write-LogMessage -Message $Message -Level "WARN" -Color "Yellow" -Icon $script:Icons.Warning
 }
 
-function Write-Error {
+function Write-WinMoleError {
     <#
     .SYNOPSIS
-        Write an error message
+        Write an error message (named to avoid conflict with built-in Write-Error cmdlet)
     #>
     param([string]$Message)
     Write-LogMessage -Message $Message -Level "ERROR" -Color "Red" -Icon $script:Icons.Error
@@ -116,7 +156,7 @@ function Write-DryRun {
 # Section Functions (for progress indication)
 # ============================================================================
 
-$global:WinMoleCurrentSection = @{
+$script:CurrentSection = @{
     Active   = $false
     Activity = $false
     Name     = ""
@@ -129,9 +169,9 @@ function Start-Section {
     #>
     param([string]$Title)
     
-    $global:WinMoleCurrentSection.Active = $true
-    $global:WinMoleCurrentSection.Activity = $false
-    $global:WinMoleCurrentSection.Name = $Title
+    $script:CurrentSection.Active = $true
+    $script:CurrentSection.Activity = $false
+    $script:CurrentSection.Name = $Title
     
     $purple = $script:Colors.PurpleBold
     $nc = $script:Colors.NC
@@ -146,10 +186,10 @@ function Stop-Section {
     .SYNOPSIS
         End the current section
     #>
-    if ($global:WinMoleCurrentSection.Active -and -not $global:WinMoleCurrentSection.Activity) {
+    if ($script:CurrentSection.Active -and -not $script:CurrentSection.Activity) {
         Write-Success "Nothing to tidy"
     }
-    $global:WinMoleCurrentSection.Active = $false
+    $script:CurrentSection.Active = $false
 }
 
 function Set-SectionActivity {
@@ -157,8 +197,8 @@ function Set-SectionActivity {
     .SYNOPSIS
         Mark that activity occurred in current section
     #>
-    if ($global:WinMoleCurrentSection.Active) {
-        $global:WinMoleCurrentSection.Activity = $true
+    if ($script:CurrentSection.Active) {
+        $script:CurrentSection.Activity = $true
     }
 }
 
@@ -280,4 +320,4 @@ function Disable-DebugMode {
 # ============================================================================
 # Exports (functions are available via dot-sourcing)
 # ============================================================================
-# Functions: Write-Info, Write-Success, Write-Warning, Write-Error, etc.
+# Functions: Write-Info, Write-Success, Write-WinMoleWarning, Write-WinMoleError, etc.

@@ -159,7 +159,7 @@ function Invoke-WinMoleCommand {
     $scriptPath = Join-Path $script:WINMOLE_BIN "$CommandName.ps1"
 
     if (-not (Test-Path $scriptPath)) {
-        Write-Error "Unknown command: $CommandName"
+        Write-WinMoleError "Unknown command: $CommandName"
         Write-Host ""
         Write-Host "Run 'winmole --help' for available commands"
         return
@@ -315,7 +315,7 @@ try {
 }
 catch {
     Write-Host ""
-    Write-Error "An error occurred: $_"
+    Write-WinMoleError "An error occurred: $_"
     Write-Host ""
     exit 1
 }

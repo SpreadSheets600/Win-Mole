@@ -365,14 +365,14 @@ function Main {
     if ($DryRun -or $env:WINMOLE_DRY_RUN -eq "1") {
         Set-DryRunMode -Enabled $true
         Write-Host ""
-        Write-Warning "DRY RUN MODE - No files will be deleted"
+        Write-WinMoleWarning "DRY RUN MODE - No files will be deleted"
     }
     
     # Determine search path
     $searchPath = if ($Path) { $Path } else { Get-Location }
     
     if (-not (Test-Path $searchPath)) {
-        Write-Error "Path not found: $searchPath"
+        Write-WinMoleError "Path not found: $searchPath"
         return
     }
     

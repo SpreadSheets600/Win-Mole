@@ -198,7 +198,7 @@ function Uninstall-Application {
         return $true
     }
     catch {
-        Write-Error "Failed to uninstall $name : $_"
+        Write-WinMoleError "Failed to uninstall $name : $_"
         return $false
     }
 }
@@ -436,7 +436,7 @@ function Main {
     if ($DryRun -or $env:WINMOLE_DRY_RUN -eq "1") {
         Set-DryRunMode -Enabled $true
         Write-Host ""
-        Write-Warning "DRY RUN MODE - No changes will be made"
+        Write-WinMoleWarning "DRY RUN MODE - No changes will be made"
     }
     
     if ($List) {
@@ -484,7 +484,7 @@ function Main {
         $matches = Find-App -SearchTerm $AppName
         
         if ($matches.Count -eq 0) {
-            Write-Error "No applications found matching '$AppName'"
+            Write-WinMoleError "No applications found matching '$AppName'"
             return
         }
         

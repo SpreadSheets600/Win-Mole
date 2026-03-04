@@ -109,7 +109,7 @@ function Main {
     if ($DryRun -or $env:WINMOLE_DRY_RUN -eq "1") {
         Set-DryRunMode -Enabled $true
         Write-Host ""
-        Write-Warning "DRY RUN MODE - No files will be deleted"
+        Write-WinMoleWarning "DRY RUN MODE - No files will be deleted"
     }
     
     # Determine what to clean
@@ -209,7 +209,7 @@ function Main {
             Invoke-SystemCleanup -All
         }
         else {
-            Write-Warning "System cleanup requires admin - skipping"
+            Write-WinMoleWarning "System cleanup requires admin - skipping"
             Write-Info "Run 'winmole clean -System' as Administrator"
         }
     }
@@ -223,7 +223,7 @@ function Main {
             Clear-WindowsUpdateCache
         }
         else {
-            Write-Warning "Windows Update cleanup requires admin - skipping"
+            Write-WinMoleWarning "Windows Update cleanup requires admin - skipping"
         }
     }
     

@@ -193,7 +193,7 @@ function Clear-ChromeCache {
     # Check if Chrome is running
     $chromeRunning = Get-Process -Name "chrome" -ErrorAction SilentlyContinue
     if ($chromeRunning) {
-        Write-Warning "Chrome is running - some caches skipped"
+        Write-WinMoleWarning "Chrome is running - some caches skipped"
     }
     
     $profiles = Get-ChildItem -Path $chromePath -Directory -ErrorAction SilentlyContinue | 
@@ -227,7 +227,7 @@ function Clear-EdgeCache {
     
     $edgeRunning = Get-Process -Name "msedge" -ErrorAction SilentlyContinue
     if ($edgeRunning) {
-        Write-Warning "Edge is running - some caches skipped"
+        Write-WinMoleWarning "Edge is running - some caches skipped"
     }
     
     $profiles = Get-ChildItem -Path $edgePath -Directory -ErrorAction SilentlyContinue |
@@ -255,7 +255,7 @@ function Clear-FirefoxCache {
     
     $firefoxRunning = Get-Process -Name "firefox" -ErrorAction SilentlyContinue
     if ($firefoxRunning) {
-        Write-Warning "Firefox is running - some caches skipped"
+        Write-WinMoleWarning "Firefox is running - some caches skipped"
     }
     
     $profiles = Get-ChildItem -Path $firefoxPath -Directory -ErrorAction SilentlyContinue
@@ -283,7 +283,7 @@ function Clear-BraveCache {
     
     $braveRunning = Get-Process -Name "brave" -ErrorAction SilentlyContinue
     if ($braveRunning) {
-        Write-Warning "Brave is running - some caches skipped"
+        Write-WinMoleWarning "Brave is running - some caches skipped"
     }
     
     $profiles = Get-ChildItem -Path $bravePath -Directory -ErrorAction SilentlyContinue |
@@ -307,7 +307,7 @@ function Clear-OperaCache {
     
     $operaRunning = Get-Process -Name "opera" -ErrorAction SilentlyContinue
     if ($operaRunning) {
-        Write-Warning "Opera is running - some caches skipped"
+        Write-WinMoleWarning "Opera is running - some caches skipped"
     }
     
     $cachePath = Join-Path $operaPath "Cache"

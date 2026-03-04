@@ -65,7 +65,7 @@ function Optimize-Drives {
     Start-Section "Drive Optimization"
     
     if (-not (Test-IsAdmin)) {
-        Write-Warning "Drive optimization requires administrator privileges"
+        Write-WinMoleWarning "Drive optimization requires administrator privileges"
         Stop-Section
         return
     }
@@ -109,7 +109,7 @@ function Optimize-Drives {
             }
         }
         catch {
-            Write-Warning "Could not optimize $letter : $_"
+            Write-WinMoleWarning "Could not optimize $letter : $_"
         }
     }
     
@@ -166,7 +166,7 @@ function Optimize-Services {
     Start-Section "Windows Services"
     
     if (-not (Test-IsAdmin)) {
-        Write-Warning "Service optimization requires administrator privileges"
+        Write-WinMoleWarning "Service optimization requires administrator privileges"
         Stop-Section
         return
     }
@@ -195,7 +195,7 @@ function Optimize-Services {
                     Write-Success "Disabled $($serviceInfo.Name)"
                 }
                 catch {
-                    Write-Warning "Could not disable $($serviceInfo.Name)"
+                    Write-WinMoleWarning "Could not disable $($serviceInfo.Name)"
                 }
             }
         }
@@ -360,7 +360,7 @@ function Manage-StartupItems {
             Write-Success "Disabled startup: $($startupItem.Name)"
         }
         catch {
-            Write-Warning "Could not disable: $($startupItem.Name)"
+            Write-WinMoleWarning "Could not disable: $($startupItem.Name)"
         }
     }
 }
@@ -377,7 +377,7 @@ function Reset-NetworkConfig {
     Start-Section "Network Reset"
     
     if (-not (Test-IsAdmin)) {
-        Write-Warning "Network reset requires administrator privileges"
+        Write-WinMoleWarning "Network reset requires administrator privileges"
         Stop-Section
         return
     }
@@ -405,7 +405,7 @@ function Reset-NetworkConfig {
     netsh int ip reset | Out-Null
     Write-Success "TCP/IP stack reset"
     
-    Write-Warning "Restart your computer for changes to take effect"
+    Write-WinMoleWarning "Restart your computer for changes to take effect"
     
     Stop-Section
 }
@@ -426,7 +426,7 @@ function Test-SystemHealth {
     foreach ($drive in $drives) {
         $freePercent = [Math]::Round(($drive.FreeSpace / $drive.Size) * 100)
         if ($freePercent -lt 10) {
-            Write-Warning "$($drive.DeviceID) has only $freePercent% free space"
+            Write-WinMoleWarning "$($drive.DeviceID) has only $freePercent% free space"
         }
         else {
             Write-Success "$($drive.DeviceID) has $freePercent% free space"
@@ -437,7 +437,7 @@ function Test-SystemHealth {
     $lastUpdate = (Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1).InstalledOn
     $daysSinceUpdate = ((Get-Date) - $lastUpdate).Days
     if ($daysSinceUpdate -gt 30) {
-        Write-Warning "Last Windows update was $daysSinceUpdate days ago"
+        Write-WinMoleWarning "Last Windows update was $daysSinceUpdate days ago"
     }
     else {
         Write-Success "Windows updated $daysSinceUpdate days ago"
@@ -451,7 +451,7 @@ function Test-SystemHealth {
             Write-Success "System files are intact"
         }
         else {
-            Write-Warning "System file issues detected - run 'sfc /scannow' as admin"
+            Write-WinMoleWarning "System file issues detected - run 'sfc /scannow' as admin"
         }
     }
     
@@ -496,7 +496,7 @@ function Main {
     if ($DryRun -or $env:WINMOLE_DRY_RUN -eq "1") {
         Set-DryRunMode -Enabled $true
         Write-Host ""
-        Write-Warning "DRY RUN MODE - No changes will be made"
+        Write-WinMoleWarning "DRY RUN MODE - No changes will be made"
     }
     
     # Determine what to run

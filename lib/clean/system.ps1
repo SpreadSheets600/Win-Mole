@@ -19,7 +19,7 @@ function Clear-SystemCaches {
         Clean Windows system-level caches (requires admin)
     #>
     if (-not (Test-IsAdmin)) {
-        Write-Warning "System cleanup requires administrator privileges"
+        Write-WinMoleWarning "System cleanup requires administrator privileges"
         return
     }
     
@@ -56,7 +56,7 @@ function Clear-SystemLogs {
         Clean Windows system logs (requires admin)
     #>
     if (-not (Test-IsAdmin)) {
-        Write-Warning "System log cleanup requires administrator privileges"
+        Write-WinMoleWarning "System log cleanup requires administrator privileges"
         return
     }
     
@@ -115,7 +115,7 @@ function Clear-MemoryDumps {
         Clean system memory dumps (requires admin)
     #>
     if (-not (Test-IsAdmin)) {
-        Write-Warning "Memory dump cleanup requires administrator privileges"
+        Write-WinMoleWarning "Memory dump cleanup requires administrator privileges"
         return
     }
     
@@ -155,7 +155,7 @@ function Clear-DefenderCache {
         Clean Windows Defender caches and history
     #>
     if (-not (Test-IsAdmin)) {
-        Write-Warning "Defender cleanup requires administrator privileges"
+        Write-WinMoleWarning "Defender cleanup requires administrator privileges"
         return
     }
     
@@ -172,7 +172,7 @@ function Clear-DefenderCache {
     if (Test-Path $quarantine) {
         $quarantineItems = Get-ChildItem -Path $quarantine -Recurse -ErrorAction SilentlyContinue
         if ($quarantineItems) {
-            Write-Warning "Defender quarantine has items - review in Windows Security before cleaning"
+            Write-WinMoleWarning "Defender quarantine has items - review in Windows Security before cleaning"
         }
     }
     
@@ -270,7 +270,7 @@ function Invoke-StorageSense {
     # Check if Storage Sense is available (Windows 10 1809+)
     $storageSenseKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy"
     if (-not (Test-Path $storageSenseKey)) {
-        Write-Warning "Storage Sense not available on this system"
+        Write-WinMoleWarning "Storage Sense not available on this system"
         Stop-Section
         return
     }
@@ -284,7 +284,7 @@ function Invoke-StorageSense {
         Write-Success "Storage Sense cleanup triggered"
     }
     else {
-        Write-Warning "Storage Sense executable not found"
+        Write-WinMoleWarning "Storage Sense executable not found"
     }
     
     Stop-Section
@@ -308,7 +308,7 @@ function Invoke-SystemCleanup {
     )
     
     if (-not (Test-IsAdmin)) {
-        Write-Error "System cleanup requires administrator privileges"
+        Write-WinMoleError "System cleanup requires administrator privileges"
         Write-Info "Please run WinMole as Administrator"
         return
     }

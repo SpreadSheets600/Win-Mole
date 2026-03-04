@@ -1,493 +1,352 @@
 # WinMole - User Cleanup Module
-# Cleans user-level caches, temp files, and logs
+# Cleans user-level temporary files, caches, and downloads
 
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
-# Import core
+# Prevent multiple sourcing
+if ((Get-Variable -Name 'WINMOLE_CLEAN_USER_LOADED' -Scope Script -ErrorAction SilentlyContinue) -and $script:WINMOLE_CLEAN_USER_LOADED) { return }
+$script:WINMOLE_CLEAN_USER_LOADED = $true
+
+# Import dependencies
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$coreDir = Join-Path (Split-Path -Parent $scriptDir) "core"
-. "$coreDir\common.ps1"
+. "$scriptDir\..\core\base.ps1"
+. "$scriptDir\..\core\log.ps1"
+. "$scriptDir\..\core\file_ops.ps1"
 
 # ============================================================================
-# User Cache Cleanup
+# Windows Temp Files Cleanup
 # ============================================================================
 
-function Clear-UserCaches {
+function Clear-UserTempFiles {
     <#
     .SYNOPSIS
-        Clean user-level application caches
+        Clean user temporary files
     #>
-    Start-Section "User Caches"
+    param([int]$DaysOld = 7)
     
-    # Windows Temp folder
-    $tempPath = [System.IO.Path]::GetTempPath()
-    if (Test-Path $tempPath -ErrorAction SilentlyContinue) {
-        Start-Spinner "Scanning Windows Temp..."
-        $null = Clear-DirectoryContents -Path $tempPath -Description "Windows Temp"
-        Stop-Spinner
+    Start-Section "User temp files"
+    
+    # User temp directory
+    $userTemp = $env:TEMP
+    if (Test-Path $userTemp) {
+        Remove-OldFiles -Path $userTemp -DaysOld $DaysOld -Description "User temp files"
     }
     
-    # User Temp folder
-    $userTemp = "$env:LOCALAPPDATA\Temp"
-    if (Test-Path $userTemp -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $userTemp -Description "User Temp"
-    }
-    
-    # Windows Prefetch (requires admin)
-    if (Test-IsAdmin) {
-        $prefetch = "$env:SystemRoot\Prefetch"
-        if (Test-Path $prefetch -ErrorAction SilentlyContinue) {
-            $null = Remove-OldFiles -Path $prefetch -DaysOld 30 -Description "Windows Prefetch"
-        }
-    }
-    
-    # Recent files list (just clears shortcuts, not actual files)
-    $recent = "$env:APPDATA\Microsoft\Windows\Recent"
-    if (Test-Path $recent -ErrorAction SilentlyContinue) {
-        $null = Remove-OldFiles -Path $recent -DaysOld 30 -Filter "*.lnk" -Description "Recent shortcuts"
-    }
-    
-    # Thumbnail cache
-    $thumbCache = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
-    if (Test-Path $thumbCache -ErrorAction SilentlyContinue) {
-        $thumbFiles = Get-ChildItem -Path $thumbCache -Filter "thumbcache_*.db" -ErrorAction SilentlyContinue
-        if ($thumbFiles) {
-            # These are locked while Explorer is running - skip if locked
-            foreach ($file in $thumbFiles) {
-                try {
-                    $null = Remove-SafeItem -Path $file.FullName -Description "Thumbnail cache"
-                }
-                catch {
-                    Write-Debug "Thumbnail cache locked: $($file.Name)"
-                }
-            }
-        }
-    }
-    
-    # Windows Icon Cache
-    $iconCache = "$env:LOCALAPPDATA\IconCache.db"
-    if (Test-Path $iconCache -ErrorAction SilentlyContinue) {
-        $null = Remove-SafeItem -Path $iconCache -Description "Icon cache"
+    # Windows Temp (if accessible)
+    $winTemp = "$env:WINDIR\Temp"
+    if ((Test-Path $winTemp) -and (Test-IsAdmin)) {
+        Remove-OldFiles -Path $winTemp -DaysOld $DaysOld -Description "Windows temp files"
     }
     
     Stop-Section
 }
 
-function Clear-UserLogs {
+# ============================================================================
+# Downloads Folder Cleanup
+# ============================================================================
+
+function Clear-OldDownloads {
     <#
     .SYNOPSIS
-        Clean user-level log files
+        Clean old files from Downloads folder (with user confirmation pattern)
     #>
-    Start-Section "User Logs"
+    param([int]$DaysOld = 30)
     
-    # Windows Error Reporting
-    $werLocal = "$env:LOCALAPPDATA\Microsoft\Windows\WER"
-    if (Test-Path $werLocal -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path "$werLocal\ReportArchive" -Description "Error Reports (Local)"
-        $null = Clear-DirectoryContents -Path "$werLocal\ReportQueue" -Description "Error Report Queue"
+    $downloadsPath = [Environment]::GetFolderPath('UserProfile') + '\Downloads'
+    
+    if (-not (Test-Path $downloadsPath)) {
+        return
     }
     
-    # Crash dumps
-    $crashDumps = "$env:LOCALAPPDATA\CrashDumps"
-    if (Test-Path $crashDumps -ErrorAction SilentlyContinue) {
-        $null = Remove-OldFiles -Path $crashDumps -DaysOld $script:Config.CrashReportAgeDays -Description "Crash dumps"
-    }
+    # Find old installers and archives
+    $patterns = @('*.exe', '*.msi', '*.zip', '*.7z', '*.rar', '*.tar.gz', '*.iso')
+    $cutoffDate = (Get-Date).AddDays(-$DaysOld)
     
-    # Windows Defender logs (user level)
-    $defenderLogs = "$env:ProgramData\Microsoft\Windows Defender\Scans\History"
-    if (Test-IsAdmin) {
-        try {
-            if (Test-Path $defenderLogs -ErrorAction SilentlyContinue) {
-                $null = Remove-OldFiles -Path $defenderLogs -DaysOld 30 -Description "Defender scan history"
-            }
-        }
-        catch {
-            Write-Debug "Could not access Defender logs: $_"
+    $oldFiles = @()
+    foreach ($pattern in $patterns) {
+        $files = Get-ChildItem -Path $downloadsPath -Filter $pattern -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.LastWriteTime -lt $cutoffDate }
+        if ($files) {
+            $oldFiles += $files
         }
     }
     
-    Stop-Section
+    if ($oldFiles.Count -gt 0) {
+        $paths = $oldFiles | ForEach-Object { $_.FullName }
+        Remove-SafeItems -Paths $paths -Description "Old downloads (>${DaysOld}d)"
+    }
 }
+
+# ============================================================================
+# Recycle Bin Cleanup
+# ============================================================================
 
 function Clear-RecycleBin {
     <#
     .SYNOPSIS
         Empty the Recycle Bin
     #>
-    Start-Section "Recycle Bin"
     
-    if (Test-Whitelisted "$env:USERPROFILE\`$Recycle.Bin") {
-        Write-Info "Recycle Bin - whitelist protected"
-        Stop-Section
+    if (Test-DryRunMode) {
+        Write-DryRun "Recycle Bin (would empty)"
+        Set-SectionActivity
         return
     }
     
     try {
-        # Get recycle bin size first
+        # Use Shell.Application COM object
         $shell = New-Object -ComObject Shell.Application
         $recycleBin = $shell.Namespace(0xA)  # Recycle Bin
         $items = $recycleBin.Items()
         
         if ($items.Count -gt 0) {
+            # Calculate size using COM ExtendedProperty for Shell objects
             $totalSize = 0
             foreach ($item in $items) {
-                $totalSize += $item.ExtendedProperty("Size")
+                $size = $item.ExtendedProperty("Size")
+                if ($size) { $totalSize += $size }
             }
             
-            if (Test-DryRunMode) {
-                Write-DryRun "Recycle Bin ($($items.Count) items, $(Format-ByteSize $totalSize) dry)"
-            }
-            else {
-                # Clear recycle bin
-                Clear-RecycleBin -Force -ErrorAction SilentlyContinue
-                Write-Success "Recycle Bin ($($items.Count) items, $(Format-ByteSize $totalSize))"
-            }
+            # Clear using Clear-RecycleBin cmdlet (Windows 10+)
+            Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+            
+            $sizeHuman = Format-ByteSize -Bytes $totalSize
+            Write-Success "Recycle Bin $($script:Colors.Green)($sizeHuman)$($script:Colors.NC)"
             Set-SectionActivity
         }
     }
     catch {
-        Write-Debug "Could not access Recycle Bin: $_"
-    }
-    
-    Stop-Section
-}
-
-# ============================================================================
-# Browser Cleanup
-# ============================================================================
-
-function Clear-BrowserCaches {
-    <#
-    .SYNOPSIS
-        Clean browser caches for common browsers
-    #>
-    Start-Section "Browser Caches"
-    
-    # Chrome
-    Clear-ChromeCache
-    
-    # Edge
-    Clear-EdgeCache
-    
-    # Firefox
-    Clear-FirefoxCache
-    
-    # Brave
-    Clear-BraveCache
-    
-    # Opera
-    Clear-OperaCache
-    
-    Stop-Section
-}
-
-function Clear-ChromeCache {
-    <#
-    .SYNOPSIS
-        Clean Google Chrome cache
-    #>
-    $chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data"
-    if (-not (Test-Path $chromePath)) { return }
-    
-    # Check if Chrome is running
-    $chromeRunning = Get-Process -Name "chrome" -ErrorAction SilentlyContinue
-    if ($chromeRunning) {
-        Write-WinMoleWarning "Chrome is running - some caches skipped"
-    }
-    
-    $profiles = Get-ChildItem -Path $chromePath -Directory -ErrorAction SilentlyContinue | 
-                Where-Object { $_.Name -match "^(Default|Profile \d+)$" }
-    
-    foreach ($profile in $profiles) {
-        $cacheDirs = @(
-            "Cache"
-            "Code Cache"
-            "GPUCache"
-            "Service Worker\CacheStorage"
-            "Service Worker\ScriptCache"
-        )
-        
-        foreach ($cacheDir in $cacheDirs) {
-            $cachePath = Join-Path $profile.FullName $cacheDir
-            if (Test-Path $cachePath -ErrorAction SilentlyContinue) {
-                $null = Clear-DirectoryContents -Path $cachePath -Description "Chrome $($profile.Name) cache"
-            }
-        }
-    }
-}
-
-function Clear-EdgeCache {
-    <#
-    .SYNOPSIS
-        Clean Microsoft Edge cache
-    #>
-    $edgePath = "$env:LOCALAPPDATA\Microsoft\Edge\User Data"
-    if (-not (Test-Path $edgePath)) { return }
-    
-    $edgeRunning = Get-Process -Name "msedge" -ErrorAction SilentlyContinue
-    if ($edgeRunning) {
-        Write-WinMoleWarning "Edge is running - some caches skipped"
-    }
-    
-    $profiles = Get-ChildItem -Path $edgePath -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match "^(Default|Profile \d+)$" }
-    
-    foreach ($profile in $profiles) {
-        $cacheDirs = @("Cache", "Code Cache", "GPUCache")
-        
-        foreach ($cacheDir in $cacheDirs) {
-            $cachePath = Join-Path $profile.FullName $cacheDir
-            if (Test-Path $cachePath -ErrorAction SilentlyContinue) {
-                $null = Clear-DirectoryContents -Path $cachePath -Description "Edge $($profile.Name) cache"
-            }
-        }
-    }
-}
-
-function Clear-FirefoxCache {
-    <#
-    .SYNOPSIS
-        Clean Mozilla Firefox cache
-    #>
-    $firefoxPath = "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles"
-    if (-not (Test-Path $firefoxPath)) { return }
-    
-    $firefoxRunning = Get-Process -Name "firefox" -ErrorAction SilentlyContinue
-    if ($firefoxRunning) {
-        Write-WinMoleWarning "Firefox is running - some caches skipped"
-    }
-    
-    $profiles = Get-ChildItem -Path $firefoxPath -Directory -ErrorAction SilentlyContinue
-    
-    foreach ($profile in $profiles) {
-        $cache2 = Join-Path $profile.FullName "cache2"
-        if (Test-Path $cache2 -ErrorAction SilentlyContinue) {
-            $null = Clear-DirectoryContents -Path $cache2 -Description "Firefox cache"
-        }
-        
-        $startupCache = Join-Path $profile.FullName "startupCache"
-        if (Test-Path $startupCache -ErrorAction SilentlyContinue) {
-            $null = Clear-DirectoryContents -Path $startupCache -Description "Firefox startup cache"
-        }
-    }
-}
-
-function Clear-BraveCache {
-    <#
-    .SYNOPSIS
-        Clean Brave browser cache
-    #>
-    $bravePath = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data"
-    if (-not (Test-Path $bravePath)) { return }
-    
-    $braveRunning = Get-Process -Name "brave" -ErrorAction SilentlyContinue
-    if ($braveRunning) {
-        Write-WinMoleWarning "Brave is running - some caches skipped"
-    }
-    
-    $profiles = Get-ChildItem -Path $bravePath -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match "^(Default|Profile \d+)$" }
-    
-    foreach ($profile in $profiles) {
-        $cachePath = Join-Path $profile.FullName "Cache"
-        if (Test-Path $cachePath -ErrorAction SilentlyContinue) {
-            $null = Clear-DirectoryContents -Path $cachePath -Description "Brave cache"
-        }
-    }
-}
-
-function Clear-OperaCache {
-    <#
-    .SYNOPSIS
-        Clean Opera browser cache
-    #>
-    $operaPath = "$env:APPDATA\Opera Software\Opera Stable"
-    if (-not (Test-Path $operaPath)) { return }
-    
-    $operaRunning = Get-Process -Name "opera" -ErrorAction SilentlyContinue
-    if ($operaRunning) {
-        Write-WinMoleWarning "Opera is running - some caches skipped"
-    }
-    
-    $cachePath = Join-Path $operaPath "Cache"
-    if (Test-Path $cachePath -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $cachePath -Description "Opera cache"
+        Write-Debug "Could not clear Recycle Bin: $_"
     }
 }
 
 # ============================================================================
-# Application Cache Cleanup
+# Recent Files Cleanup
 # ============================================================================
 
-function Clear-ApplicationCaches {
+function Clear-RecentFiles {
     <#
     .SYNOPSIS
-        Clean common application caches
+        Clean old recent file shortcuts
     #>
-    Start-Section "Application Caches"
+    param([int]$DaysOld = 30)
     
-    # Discord
-    $discordCache = "$env:APPDATA\discord\Cache"
-    if (Test-Path $discordCache -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $discordCache -Description "Discord cache"
+    $recentPath = "$env:APPDATA\Microsoft\Windows\Recent"
+    
+    if (Test-Path $recentPath) {
+        Remove-OldFiles -Path $recentPath -DaysOld $DaysOld -Filter "*.lnk" -Description "Old recent shortcuts"
     }
     
-    # Slack
-    $slackCache = "$env:APPDATA\Slack\Cache"
-    if (Test-Path $slackCache -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $slackCache -Description "Slack cache"
+    # AutomaticDestinations (jump lists)
+    $autoDestPath = "$recentPath\AutomaticDestinations"
+    if (Test-Path $autoDestPath) {
+        Remove-OldFiles -Path $autoDestPath -DaysOld $DaysOld -Description "Old jump list entries"
     }
-    
-    # Teams
-    $teamsCache = "$env:APPDATA\Microsoft\Teams\Cache"
-    if (Test-Path $teamsCache -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $teamsCache -Description "Teams cache"
-    }
-    
-    # Spotify
-    $spotifyCache = "$env:LOCALAPPDATA\Spotify\Data"
-    if (Test-Path $spotifyCache -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $spotifyCache -Description "Spotify cache"
-    }
-    
-    # VS Code
-    $vscodeCache = "$env:APPDATA\Code\Cache"
-    if (Test-Path $vscodeCache -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $vscodeCache -Description "VS Code cache"
-    }
-    $vscodeCachedData = "$env:APPDATA\Code\CachedData"
-    if (Test-Path $vscodeCachedData -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $vscodeCachedData -Description "VS Code cached data"
-    }
-    
-    # Zoom
-    $zoomCache = "$env:APPDATA\Zoom\data"
-    if (Test-Path $zoomCache -ErrorAction SilentlyContinue) {
-        $null = Remove-OldFiles -Path $zoomCache -DaysOld 7 -Description "Zoom cache"
-    }
-    
-    # Adobe
-    $adobeCache = "$env:LOCALAPPDATA\Adobe"
-    if (Test-Path $adobeCache -ErrorAction SilentlyContinue) {
-        $adobeCacheDirs = Get-ChildItem -Path $adobeCache -Directory -ErrorAction SilentlyContinue |
-                         Where-Object { $_.Name -match "Cache|Tmp" }
-        foreach ($dir in $adobeCacheDirs) {
-            $null = Clear-DirectoryContents -Path $dir.FullName -Description "Adobe cache"
-        }
-    }
-    
-    # Steam (download cache only - not game data)
-    $steamCache = "$env:LOCALAPPDATA\Steam\htmlcache"
-    if (Test-Path $steamCache -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $steamCache -Description "Steam HTML cache"
-    }
-    
-    # Epic Games Launcher
-    $epicCache = "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\webcache"
-    if (Test-Path $epicCache -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $epicCache -Description "Epic Games cache"
-    }
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Windows Update Cleanup
+# Thumbnail Cache Cleanup
 # ============================================================================
 
-function Clear-WindowsUpdateCache {
+function Clear-ThumbnailCache {
     <#
     .SYNOPSIS
-        Clean Windows Update cache (requires admin)
+        Clean Windows thumbnail cache
     #>
-    if (-not (Test-IsAdmin)) {
-        Write-Debug "Skipping Windows Update cache - requires admin"
+    
+    $thumbCachePath = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
+    
+    if (-not (Test-Path $thumbCachePath)) {
         return
     }
     
-    Start-Section "Windows Update Cache"
+    # Thumbnail cache files (thumbcache_*.db)
+    $thumbFiles = Get-ChildItem -Path $thumbCachePath -Filter "thumbcache_*.db" -File -ErrorAction SilentlyContinue
     
-    # SoftwareDistribution download folder
-    $softDist = "$env:SystemRoot\SoftwareDistribution\Download"
-    if (Test-Path $softDist -ErrorAction SilentlyContinue) {
-        # Stop Windows Update service temporarily
-        $wuService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
-        $wasRunning = $wuService.Status -eq 'Running'
-        
-        if ($wasRunning -and -not (Test-DryRunMode)) {
-            Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
-        }
-        
-        $null = Clear-DirectoryContents -Path $softDist -Description "Windows Update downloads"
-        
-        if ($wasRunning -and -not (Test-DryRunMode)) {
-            Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-        }
+    if ($thumbFiles) {
+        $paths = $thumbFiles | ForEach-Object { $_.FullName }
+        Remove-SafeItems -Paths $paths -Description "Thumbnail cache"
     }
     
-    # Delivery Optimization cache
-    $deliveryOpt = "$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache"
-    if (Test-Path $deliveryOpt -ErrorAction SilentlyContinue) {
-        $null = Clear-DirectoryContents -Path $deliveryOpt -Description "Delivery Optimization cache"
+    # Icon cache
+    $iconCache = "$env:LOCALAPPDATA\IconCache.db"
+    if (Test-Path $iconCache) {
+        Remove-SafeItem -Path $iconCache -Description "Icon cache"
     }
-    
-    Stop-Section
 }
 
 # ============================================================================
-# Main Cleanup Function
+# Windows Error Reports Cleanup
+# ============================================================================
+
+function Clear-ErrorReports {
+    <#
+    .SYNOPSIS
+        Clean Windows Error Reporting files
+    #>
+    param([int]$DaysOld = 7)
+    
+    # Note: $env:LOCALAPPDATA and $env:USERPROFILE\AppData\Local resolve to the same path
+    $werPaths = @(
+        "$env:LOCALAPPDATA\Microsoft\Windows\WER"
+        "$env:LOCALAPPDATA\CrashDumps"
+    )
+    
+    foreach ($path in $werPaths) {
+        if (Test-Path $path) {
+            $items = Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+            if ($items) {
+                $paths = $items | ForEach-Object { $_.FullName }
+                Remove-SafeItems -Paths $paths -Description "Error reports"
+            }
+        }
+    }
+    
+    # Memory dumps (only check user profile root for .dmp files, CrashDumps already handled above)
+    $dumpPaths = @(
+        "$env:USERPROFILE\*.dmp"
+    )
+    
+    foreach ($path in $dumpPaths) {
+        $dumps = Get-ChildItem -Path $path -Filter "*.dmp" -ErrorAction SilentlyContinue
+        if ($dumps) {
+            $paths = $dumps | ForEach-Object { $_.FullName }
+            Remove-SafeItems -Paths $paths -Description "Memory dumps"
+        }
+    }
+}
+
+# ============================================================================
+# Windows Prefetch Cleanup (requires admin)
+# ============================================================================
+
+function Clear-Prefetch {
+    <#
+    .SYNOPSIS
+        Clean Windows Prefetch files (requires admin)
+    #>
+    param([int]$DaysOld = 14)
+    
+    if (-not (Test-IsAdmin)) {
+        Write-Debug "Skipping Prefetch cleanup - requires admin"
+        return
+    }
+    
+    $prefetchPath = "$env:WINDIR\Prefetch"
+    
+    if (Test-Path $prefetchPath) {
+        Remove-OldFiles -Path $prefetchPath -DaysOld $DaysOld -Description "Prefetch files"
+    }
+}
+
+# ============================================================================
+# Log Files Cleanup
+# ============================================================================
+
+function Clear-UserLogs {
+    <#
+    .SYNOPSIS
+        Clean old log files from common locations
+    #>
+    param([int]$DaysOld = 7)
+    
+    $logLocations = @(
+        "$env:LOCALAPPDATA\Temp\*.log"
+        "$env:APPDATA\*.log"
+        "$env:USERPROFILE\*.log"
+    )
+    
+    foreach ($location in $logLocations) {
+        $parent = Split-Path -Parent $location
+        $filter = Split-Path -Leaf $location
+        
+        if (Test-Path $parent) {
+            $logs = Get-ChildItem -Path $parent -Filter $filter -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$DaysOld) }
+            
+            if ($logs) {
+                $paths = $logs | ForEach-Object { $_.FullName }
+                Remove-SafeItems -Paths $paths -Description "Old log files"
+            }
+        }
+    }
+}
+
+# ============================================================================
+# Clipboard History Cleanup
+# ============================================================================
+
+function Clear-ClipboardHistory {
+    <#
+    .SYNOPSIS
+        Clear Windows clipboard history
+    #>
+    
+    if (Test-DryRunMode) {
+        Write-DryRun "Clipboard history (would clear)"
+        return
+    }
+    
+    try {
+        # Load Windows Forms assembly for clipboard access
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        
+        # Clear current clipboard
+        [System.Windows.Forms.Clipboard]::Clear()
+        
+        # Clear clipboard history (Windows 10 1809+)
+        $clipboardPath = "$env:LOCALAPPDATA\Microsoft\Windows\Clipboard"
+        if (Test-Path $clipboardPath) {
+            Clear-DirectoryContents -Path $clipboardPath -Description "Clipboard history"
+        }
+    }
+    catch {
+        Write-Debug "Could not clear clipboard: $_"
+    }
+}
+
+# ============================================================================
+# Main User Cleanup Function
 # ============================================================================
 
 function Invoke-UserCleanup {
     <#
     .SYNOPSIS
-        Run all user-level cleanup operations
+        Run all user-level cleanup tasks
     #>
     param(
-        [switch]$IncludeBrowsers,
-        [switch]$IncludeApps,
-        [switch]$IncludeRecycleBin,
-        [switch]$IncludeWindowsUpdate,
-        [switch]$All
+        [int]$TempDaysOld = 7,
+        [int]$DownloadsDaysOld = 30,
+        [int]$LogDaysOld = 7,
+        [switch]$IncludeDownloads,
+        [switch]$IncludeRecycleBin
     )
     
-    Reset-CleanupStats
+    Start-Section "User essentials"
     
-    # Always clean basic caches and logs
-    Clear-UserCaches
-    Clear-UserLogs
+    # Always clean these
+    Clear-UserTempFiles -DaysOld $TempDaysOld
+    Clear-RecentFiles -DaysOld 30
+    Clear-ThumbnailCache
+    Clear-ErrorReports -DaysOld 7
+    Clear-UserLogs -DaysOld $LogDaysOld
+    Clear-Prefetch -DaysOld 14
     
-    # Optional cleanups
-    if ($All -or $IncludeBrowsers) {
-        Clear-BrowserCaches
+    # Optional: Downloads cleanup
+    if ($IncludeDownloads) {
+        Clear-OldDownloads -DaysOld $DownloadsDaysOld
     }
     
-    if ($All -or $IncludeApps) {
-        Clear-ApplicationCaches
-    }
-    
-    if ($All -or $IncludeRecycleBin) {
+    # Optional: Recycle Bin
+    if ($IncludeRecycleBin) {
         Clear-RecycleBin
     }
     
-    if ($All -or $IncludeWindowsUpdate) {
-        Clear-WindowsUpdateCache
-    }
-    
-    # Clean empty directories
-    Start-Section "Empty Directories"
-    $null = Remove-EmptyDirectories -Path "$env:LOCALAPPDATA" -Description "Empty folders (LocalAppData)"
-    $null = Remove-EmptyDirectories -Path "$env:APPDATA" -Description "Empty folders (AppData)"
     Stop-Section
-    
-    # Show summary
-    $stats = Get-CleanupStats
-    Show-Summary -SizeBytes ($stats.TotalSizeKB * 1024) -ItemCount $stats.TotalItems -Action "Cleaned"
 }
 
 # ============================================================================
-# Exports (functions are available via dot-sourcing)
+# Exports
 # ============================================================================
-# Functions: Clear-UserCaches, Clear-BrowserCaches, Invoke-UserCleanup, etc.
+# Functions: Clear-UserTempFiles, Clear-OldDownloads, Clear-RecycleBin, etc.

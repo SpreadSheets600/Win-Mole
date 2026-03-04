@@ -3,9 +3,13 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -13,251 +17,383 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
-// Styles
-var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("205"))
-
-	selectedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("229")).
-			Background(lipgloss.Color("57")).
-			Bold(true)
-
-	normalStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
-
-	dimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
-
-	sizeStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Width(10).
-			Align(lipgloss.Right)
-
-	barStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205"))
-
-	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
+// Scanning limits to prevent infinite scanning
+const (
+	dirSizeTimeout   = 500 * time.Millisecond // Max time to calculate a single directory size
+	maxFilesPerDir   = 10000                  // Max files to scan per directory
+	maxScanDepth     = 10                     // Max recursion depth (shallow scan)
+	shallowScanDepth = 3                      // Depth for quick size estimation
 )
 
-// Entry represents a file or directory
-type Entry struct {
-	Name  string
-	Path  string
-	Size  int64
-	IsDir bool
+// ANSI color codes
+const (
+	colorReset      = "\033[0m"
+	colorBold       = "\033[1m"
+	colorDim        = "\033[2m"
+	colorPurple     = "\033[35m"
+	colorPurpleBold = "\033[1;35m"
+	colorCyan       = "\033[36m"
+	colorCyanBold   = "\033[1;36m"
+	colorYellow     = "\033[33m"
+	colorGreen      = "\033[32m"
+	colorRed        = "\033[31m"
+	colorGray       = "\033[90m"
+	colorWhite      = "\033[97m"
+)
+
+// Icons
+const (
+	iconFolder   = "📁"
+	iconFile     = "📄"
+	iconDisk     = "💾"
+	iconClean    = "🧹"
+	iconTrash    = "🗑️"
+	iconBack     = "⬅️"
+	iconSelected = "✓"
+	iconArrow    = "➤"
+)
+
+// Cleanable directory patterns
+var cleanablePatterns = map[string]bool{
+	"node_modules":  true,
+	"vendor":        true,
+	".venv":         true,
+	"venv":          true,
+	"__pycache__":   true,
+	".pytest_cache": true,
+	"target":        true,
+	"build":         true,
+	"dist":          true,
+	".next":         true,
+	".nuxt":         true,
+	".turbo":        true,
+	".parcel-cache": true,
+	"bin":           true,
+	"obj":           true,
+	".gradle":       true,
+	".idea":         true,
+	".vs":           true,
 }
 
-// Model is the Bubble Tea model
-type model struct {
-	path         string
-	entries      []Entry
-	selected     int
-	offset       int
-	width        int
-	height       int
-	scanning     bool
-	status       string
-	totalSize    int64
-	history      []historyEntry
-	spinner      int
-	filesScanned int64
-	dirsScanned  int64
+// Skip patterns for scanning
+var skipPatterns = map[string]bool{
+	"$Recycle.Bin":              true,
+	"System Volume Information": true,
+	"Windows":                   true,
+	"Program Files":             true,
+	"Program Files (x86)":       true,
+	"ProgramData":               true,
+	"Recovery":                  true,
+	"Config.Msi":                true,
+}
+
+// Protected paths that should NEVER be deleted
+var protectedPaths = []string{
+	`C:\Windows`,
+	`C:\Program Files`,
+	`C:\Program Files (x86)`,
+	`C:\ProgramData`,
+	`C:\Users\Default`,
+	`C:\Users\Public`,
+	`C:\Recovery`,
+	`C:\System Volume Information`,
+}
+
+// isProtectedPath checks if a path is protected from deletion
+func isProtectedPath(path string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return true // If we can't resolve the path, treat it as protected
+	}
+	absPath = strings.ToLower(absPath)
+
+	// Check against protected paths
+	for _, protected := range protectedPaths {
+		protectedLower := strings.ToLower(protected)
+		if absPath == protectedLower || strings.HasPrefix(absPath, protectedLower+`\`) {
+			return true
+		}
+	}
+
+	// Check against skip patterns (system directories)
+	baseName := strings.ToLower(filepath.Base(absPath))
+	for pattern := range skipPatterns {
+		if strings.ToLower(pattern) == baseName {
+			// Only protect if it's at a root level (e.g., C:\Windows, not C:\Projects\Windows)
+			parent := filepath.Dir(absPath)
+			if len(parent) <= 3 { // e.g., "C:\"
+				return true
+			}
+		}
+	}
+
+	// Protect Windows directory itself
+	winDir := strings.ToLower(os.Getenv("WINDIR"))
+	sysRoot := strings.ToLower(os.Getenv("SYSTEMROOT"))
+	if winDir != "" && (absPath == winDir || strings.HasPrefix(absPath, winDir+`\`)) {
+		return true
+	}
+	if sysRoot != "" && (absPath == sysRoot || strings.HasPrefix(absPath, sysRoot+`\`)) {
+		return true
+	}
+
+	return false
+}
+
+// Entry types
+type dirEntry struct {
+	Name        string
+	Path        string
+	Size        int64
+	IsDir       bool
+	LastAccess  time.Time
+	IsCleanable bool
+}
+
+type fileEntry struct {
+	Name string
+	Path string
+	Size int64
 }
 
 type historyEntry struct {
-	Path     string
-	Selected int
-	Offset   int
+	Path       string
+	Entries    []dirEntry
+	LargeFiles []fileEntry
+	TotalSize  int64
+	Selected   int
+}
+
+// Model for Bubble Tea
+type model struct {
+	path           string
+	entries        []dirEntry
+	largeFiles     []fileEntry
+	history        []historyEntry
+	selected       int
+	totalSize      int64
+	scanning       bool
+	showLargeFiles bool
+	multiSelected  map[string]bool
+	deleteConfirm  bool
+	deleteTarget   string   // Display name for confirmation
+	deleteTargets  []string // Actual paths to delete (for multi-delete)
+	scanProgress   int64
+	scanTotal      int64
+	width          int
+	height         int
+	err            error
+	cache          map[string]historyEntry
 }
 
 // Messages
-type scanResultMsg struct {
-	entries   []Entry
-	totalSize int64
-	err       error
+type scanCompleteMsg struct {
+	entries    []dirEntry
+	largeFiles []fileEntry
+	totalSize  int64
 }
 
-type tickMsg time.Time
-
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-func main() {
-	startPath := os.Getenv("WINMOLE_ANALYZE_PATH")
-	if startPath == "" && len(os.Args) > 1 {
-		startPath = os.Args[1]
-	}
-	if startPath == "" {
-		startPath = os.Getenv("USERPROFILE")
-	}
-
-	absPath, err := filepath.Abs(startPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
-		os.Exit(1)
-	}
-
-	p := tea.NewProgram(newModel(absPath), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+type scanProgressMsg struct {
+	current int64
+	total   int64
 }
 
-func newModel(path string) model {
+type scanErrorMsg struct {
+	err error
+}
+
+type deleteCompleteMsg struct {
+	path string
+	err  error
+}
+
+func newModel(startPath string) model {
 	return model{
-		path:     path,
-		status:   "Scanning...",
-		scanning: true,
+		path:          startPath,
+		entries:       []dirEntry{},
+		largeFiles:    []fileEntry{},
+		history:       []historyEntry{},
+		selected:      0,
+		scanning:      true,
+		multiSelected: make(map[string]bool),
+		cache:         make(map[string]historyEntry),
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.scanCmd(), tickCmd())
-}
-
-func (m model) scanCmd() tea.Cmd {
-	return func() tea.Msg {
-		entries, totalSize, err := scanDirectory(m.path, &m.filesScanned, &m.dirsScanned)
-		return scanResultMsg{entries: entries, totalSize: totalSize, err: err}
-	}
-}
-
-func tickCmd() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
+	return m.scanPath(m.path)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		return m.handleKey(msg)
-
+		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-
-	case scanResultMsg:
-		m.scanning = false
-		if msg.err != nil {
-			m.status = fmt.Sprintf("Error: %v", msg.err)
-			return m, nil
-		}
+	case scanCompleteMsg:
 		m.entries = msg.entries
+		m.largeFiles = msg.largeFiles
 		m.totalSize = msg.totalSize
+		m.scanning = false
 		m.selected = 0
-		m.offset = 0
-		m.status = fmt.Sprintf("Total: %s", humanizeBytes(m.totalSize))
+		// Cache result
+		m.cache[m.path] = historyEntry{
+			Path:       m.path,
+			Entries:    msg.entries,
+			LargeFiles: msg.largeFiles,
+			TotalSize:  msg.totalSize,
+		}
 		return m, nil
+	case scanProgressMsg:
+		m.scanProgress = msg.current
+		m.scanTotal = msg.total
+		return m, nil
+	case scanErrorMsg:
+		m.err = msg.err
+		m.scanning = false
+		return m, nil
+	case deleteCompleteMsg:
+		m.deleteConfirm = false
+		m.deleteTarget = ""
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			// Rescan after delete
+			m.scanning = true
+			delete(m.cache, m.path)
+			return m, m.scanPath(m.path)
+		}
+		return m, nil
+	}
+	return m, nil
+}
 
-	case tickMsg:
-		if m.scanning {
-			m.spinner = (m.spinner + 1) % len(spinnerFrames)
-			files := atomic.LoadInt64(&m.filesScanned)
-			dirs := atomic.LoadInt64(&m.dirsScanned)
-			m.status = fmt.Sprintf("%s Scanning... %d files, %d dirs",
-				spinnerFrames[m.spinner], files, dirs)
-			return m, tickCmd()
+func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle delete confirmation
+	if m.deleteConfirm {
+		switch msg.String() {
+		case "y", "Y":
+			m.deleteConfirm = false
+			if len(m.deleteTargets) > 0 {
+				// Multi-delete
+				targets := m.deleteTargets
+				m.deleteTargets = nil
+				m.deleteTarget = ""
+				return m, m.deletePaths(targets)
+			}
+			// Single delete
+			target := m.deleteTarget
+			m.deleteTarget = ""
+			return m, m.deletePath(target)
+		case "n", "N", "esc":
+			m.deleteConfirm = false
+			m.deleteTarget = ""
+			m.deleteTargets = nil
+			return m, nil
 		}
 		return m, nil
 	}
 
-	return m, nil
-}
-
-func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "ctrl+c", "esc":
-		if len(m.history) > 0 {
-			// Go back
-			last := m.history[len(m.history)-1]
-			m.history = m.history[:len(m.history)-1]
-			m.path = last.Path
-			m.selected = last.Selected
-			m.offset = last.Offset
-			m.scanning = true
-			atomic.StoreInt64(&m.filesScanned, 0)
-			atomic.StoreInt64(&m.dirsScanned, 0)
-			return m, tea.Batch(m.scanCmd(), tickCmd())
-		}
+	case "q", "ctrl+c":
 		return m, tea.Quit
-
 	case "up", "k":
 		if m.selected > 0 {
 			m.selected--
-			if m.selected < m.offset {
-				m.offset = m.selected
-			}
 		}
-
 	case "down", "j":
 		if m.selected < len(m.entries)-1 {
 			m.selected++
-			viewportHeight := m.height - 6
-			if m.selected >= m.offset+viewportHeight {
-				m.offset = m.selected - viewportHeight + 1
+		}
+	case "enter", "right", "l":
+		if !m.scanning && len(m.entries) > 0 {
+			entry := m.entries[m.selected]
+			if entry.IsDir {
+				// Save current state to history
+				m.history = append(m.history, historyEntry{
+					Path:       m.path,
+					Entries:    m.entries,
+					LargeFiles: m.largeFiles,
+					TotalSize:  m.totalSize,
+					Selected:   m.selected,
+				})
+				m.path = entry.Path
+				m.selected = 0
+				m.multiSelected = make(map[string]bool)
+
+				// Check cache
+				if cached, ok := m.cache[entry.Path]; ok {
+					m.entries = cached.Entries
+					m.largeFiles = cached.LargeFiles
+					m.totalSize = cached.TotalSize
+					return m, nil
+				}
+
+				m.scanning = true
+				return m, m.scanPath(entry.Path)
 			}
 		}
-
-	case "enter", "right", "l":
-		if len(m.entries) > 0 && m.entries[m.selected].IsDir {
-			// Save history
-			m.history = append(m.history, historyEntry{
-				Path:     m.path,
-				Selected: m.selected,
-				Offset:   m.offset,
-			})
-			m.path = m.entries[m.selected].Path
-			m.scanning = true
-			m.status = "Scanning..."
-			atomic.StoreInt64(&m.filesScanned, 0)
-			atomic.StoreInt64(&m.dirsScanned, 0)
-			return m, tea.Batch(m.scanCmd(), tickCmd())
-		}
-
 	case "left", "h", "backspace":
 		if len(m.history) > 0 {
 			last := m.history[len(m.history)-1]
 			m.history = m.history[:len(m.history)-1]
 			m.path = last.Path
+			m.entries = last.Entries
+			m.largeFiles = last.LargeFiles
+			m.totalSize = last.TotalSize
 			m.selected = last.Selected
-			m.offset = last.Offset
-			m.scanning = true
-			atomic.StoreInt64(&m.filesScanned, 0)
-			atomic.StoreInt64(&m.dirsScanned, 0)
-			return m, tea.Batch(m.scanCmd(), tickCmd())
-		} else {
-			// Go to parent
-			parent := filepath.Dir(m.path)
-			if parent != m.path {
-				m.history = append(m.history, historyEntry{
-					Path:     m.path,
-					Selected: m.selected,
-					Offset:   m.offset,
-				})
-				m.path = parent
-				m.scanning = true
-				atomic.StoreInt64(&m.filesScanned, 0)
-				atomic.StoreInt64(&m.dirsScanned, 0)
-				return m, tea.Batch(m.scanCmd(), tickCmd())
+			m.multiSelected = make(map[string]bool)
+			m.scanning = false
+		}
+	case "space":
+		if len(m.entries) > 0 {
+			entry := m.entries[m.selected]
+			if m.multiSelected[entry.Path] {
+				delete(m.multiSelected, entry.Path)
+			} else {
+				m.multiSelected[entry.Path] = true
 			}
 		}
-
+	case "d", "delete":
+		if len(m.entries) > 0 {
+			entry := m.entries[m.selected]
+			m.deleteConfirm = true
+			m.deleteTarget = entry.Path
+		}
+	case "D":
+		// Delete all selected
+		if len(m.multiSelected) > 0 {
+			m.deleteConfirm = true
+			// Collect paths for deletion
+			var paths []string
+			for path := range m.multiSelected {
+				paths = append(paths, path)
+			}
+			m.deleteTargets = paths
+			m.deleteTarget = fmt.Sprintf("%d items", len(paths))
+		}
+	case "f":
+		m.showLargeFiles = !m.showLargeFiles
 	case "r":
+		// Refresh
+		delete(m.cache, m.path)
 		m.scanning = true
-		m.status = "Scanning..."
-		atomic.StoreInt64(&m.filesScanned, 0)
-		atomic.StoreInt64(&m.dirsScanned, 0)
-		return m, tea.Batch(m.scanCmd(), tickCmd())
+		return m, m.scanPath(m.path)
+	case "o":
+		// Open in Explorer
+		if len(m.entries) > 0 {
+			entry := m.entries[m.selected]
+			openInExplorer(entry.Path)
+		}
+	case "g":
+		m.selected = 0
+	case "G":
+		m.selected = len(m.entries) - 1
 	}
-
 	return m, nil
 }
 
@@ -265,157 +401,356 @@ func (m model) View() string {
 	var b strings.Builder
 
 	// Header
-	header := titleStyle.Render(fmt.Sprintf("📁 %s", m.path))
-	b.WriteString(header)
-	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf("%s%s WinMole Disk Analyzer %s\n", colorPurpleBold, iconDisk, colorReset))
+	b.WriteString(fmt.Sprintf("%s%s%s\n", colorGray, m.path, colorReset))
+	b.WriteString("\n")
 
-	if m.scanning {
-		b.WriteString(statusStyle.Render(m.status))
-		b.WriteString("\n")
+	// Show delete confirmation
+	if m.deleteConfirm {
+		b.WriteString(fmt.Sprintf("%s%s Delete %s? (y/n)%s\n", colorRed, iconTrash, m.deleteTarget, colorReset))
 		return b.String()
 	}
 
-	if len(m.entries) == 0 {
-		b.WriteString(dimStyle.Render("  (empty directory)"))
-		b.WriteString("\n")
-	} else {
-		viewportHeight := m.height - 6
-		if viewportHeight < 5 {
-			viewportHeight = 5
+	// Scanning indicator
+	if m.scanning {
+		b.WriteString(fmt.Sprintf("%s⠋ Scanning...%s\n", colorCyan, colorReset))
+		if m.scanTotal > 0 {
+			b.WriteString(fmt.Sprintf("%s  %d / %d items%s\n", colorGray, m.scanProgress, m.scanTotal, colorReset))
 		}
-
-		endIdx := m.offset + viewportHeight
-		if endIdx > len(m.entries) {
-			endIdx = len(m.entries)
-		}
-
-		for i := m.offset; i < endIdx; i++ {
-			entry := m.entries[i]
-
-			// Size bar
-			var barWidth int
-			if m.totalSize > 0 {
-				barWidth = int(float64(entry.Size) / float64(m.totalSize) * 20)
-				if barWidth > 20 {
-					barWidth = 20
-				}
-			}
-			bar := strings.Repeat("█", barWidth) + strings.Repeat("░", 20-barWidth)
-
-			// Icon
-			icon := "📄"
-			if entry.IsDir {
-				icon = "📁"
-			}
-
-			// Format line
-			size := sizeStyle.Render(humanizeBytes(entry.Size))
-			barStr := barStyle.Render(bar)
-			name := fmt.Sprintf("%s %s", icon, entry.Name)
-
-			line := fmt.Sprintf("%s %s %s", size, barStr, name)
-
-			if i == m.selected {
-				b.WriteString(selectedStyle.Render(line))
-			} else {
-				b.WriteString(normalStyle.Render(line))
-			}
-			b.WriteString("\n")
-		}
+		return b.String()
 	}
 
-	// Status bar
+	// Error display
+	if m.err != nil {
+		b.WriteString(fmt.Sprintf("%sError: %v%s\n", colorRed, m.err, colorReset))
+		b.WriteString("\n")
+	}
+
+	// Total size
+	b.WriteString(fmt.Sprintf("  Total: %s%s%s\n", colorYellow, formatBytes(m.totalSize), colorReset))
 	b.WriteString("\n")
-	b.WriteString(statusStyle.Render(m.status))
+
+	// Large files toggle
+	if m.showLargeFiles && len(m.largeFiles) > 0 {
+		b.WriteString(fmt.Sprintf("%s%s Large Files (>100MB):%s\n", colorCyanBold, iconFile, colorReset))
+		for i, f := range m.largeFiles {
+			if i >= 10 {
+				b.WriteString(fmt.Sprintf("  %s... and %d more%s\n", colorGray, len(m.largeFiles)-10, colorReset))
+				break
+			}
+			b.WriteString(fmt.Sprintf("  %s%s%s %s\n", colorYellow, formatBytes(f.Size), colorReset, truncatePath(f.Path, 60)))
+		}
+		b.WriteString("\n")
+	}
+
+	// Directory entries
+	visibleEntries := m.height - 12
+	if visibleEntries < 5 {
+		visibleEntries = 20
+	}
+
+	start := 0
+	if m.selected >= visibleEntries {
+		start = m.selected - visibleEntries + 1
+	}
+
+	for i := start; i < len(m.entries) && i < start+visibleEntries; i++ {
+		entry := m.entries[i]
+		prefix := "  "
+
+		// Selection indicator
+		if i == m.selected {
+			prefix = fmt.Sprintf("%s%s%s ", colorCyan, iconArrow, colorReset)
+		} else if m.multiSelected[entry.Path] {
+			prefix = fmt.Sprintf("%s%s%s ", colorGreen, iconSelected, colorReset)
+		}
+
+		// Icon
+		icon := iconFile
+		if entry.IsDir {
+			icon = iconFolder
+		}
+		if entry.IsCleanable {
+			icon = iconClean
+		}
+
+		// Size and percentage
+		pct := float64(0)
+		if m.totalSize > 0 {
+			pct = float64(entry.Size) / float64(m.totalSize) * 100
+		}
+
+		// Bar
+		barWidth := 20
+		filled := int(pct / 100 * float64(barWidth))
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+
+		// Color based on selection
+		nameColor := colorReset
+		if i == m.selected {
+			nameColor = colorCyanBold
+		}
+
+		b.WriteString(fmt.Sprintf("%s%s %s%8s%s %s%s%s %s%.1f%%%s %s\n",
+			prefix,
+			icon,
+			colorYellow, formatBytes(entry.Size), colorReset,
+			colorGray, bar, colorReset,
+			colorDim, pct, colorReset,
+			nameColor+entry.Name+colorReset,
+		))
+	}
+
+	// Footer with keybindings
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("↑/↓ navigate • Enter/→ open • ←/Backspace back • r refresh • q quit"))
+	b.WriteString(fmt.Sprintf("%s↑↓%s navigate  %s↵%s enter  %s←%s back  %sf%s files  %sd%s delete  %sr%s refresh  %sq%s quit%s\n",
+		colorCyan, colorReset,
+		colorCyan, colorReset,
+		colorCyan, colorReset,
+		colorCyan, colorReset,
+		colorCyan, colorReset,
+		colorCyan, colorReset,
+		colorCyan, colorReset,
+		colorReset,
+	))
 
 	return b.String()
 }
 
-// scanDirectory scans a directory and returns entries sorted by size
-func scanDirectory(path string, filesScanned, dirsScanned *int64) ([]Entry, int64, error) {
-	var entries []Entry
-	var totalSize int64
-	var mu sync.Mutex
+// scanPath scans a directory and returns entries
+func (m model) scanPath(path string) tea.Cmd {
+	return func() tea.Msg {
+		entries, largeFiles, totalSize, err := scanDirectory(path)
+		if err != nil {
+			return scanErrorMsg{err: err}
+		}
+		return scanCompleteMsg{
+			entries:    entries,
+			largeFiles: largeFiles,
+			totalSize:  totalSize,
+		}
+	}
+}
 
-	dirEntries, err := os.ReadDir(path)
+// deletePath deletes a file or directory with protection checks
+func (m model) deletePath(path string) tea.Cmd {
+	return func() tea.Msg {
+		// Safety check: never delete protected paths
+		if isProtectedPath(path) {
+			return deleteCompleteMsg{
+				path: path,
+				err:  fmt.Errorf("cannot delete protected system path: %s", path),
+			}
+		}
+
+		err := os.RemoveAll(path)
+		return deleteCompleteMsg{path: path, err: err}
+	}
+}
+
+// deletePaths deletes multiple files or directories with protection checks
+func (m model) deletePaths(paths []string) tea.Cmd {
+	return func() tea.Msg {
+		var errors []string
+		for _, path := range paths {
+			// Safety check: never delete protected paths
+			if isProtectedPath(path) {
+				errors = append(errors, fmt.Sprintf("protected: %s", path))
+				continue
+			}
+			if err := os.RemoveAll(path); err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", path, err))
+			}
+		}
+		if len(errors) > 0 {
+			return deleteCompleteMsg{
+				path: fmt.Sprintf("%d items", len(paths)),
+				err:  fmt.Errorf("failed to delete some items: %s", strings.Join(errors, "; ")),
+			}
+		}
+		return deleteCompleteMsg{path: fmt.Sprintf("%d items", len(paths)), err: nil}
+	}
+}
+
+// scanDirectory scans a directory concurrently
+func scanDirectory(path string) ([]dirEntry, []fileEntry, int64, error) {
+	entries, err := os.ReadDir(path)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 10) // Limit concurrent goroutines
+	var (
+		dirEntries []dirEntry
+		largeFiles []fileEntry
+		totalSize  int64
+		mu         sync.Mutex
+		wg         sync.WaitGroup
+	)
 
-	for _, de := range dirEntries {
-		de := de
+	numWorkers := runtime.NumCPU() * 2
+	if numWorkers > 32 {
+		numWorkers = 32
+	}
+
+	sem := make(chan struct{}, numWorkers)
+	var processedCount int64
+
+	for _, entry := range entries {
+		name := entry.Name()
+		entryPath := filepath.Join(path, name)
+
+		// Skip system directories
+		if skipPatterns[name] {
+			continue
+		}
+
 		wg.Add(1)
 		sem <- struct{}{}
 
-		go func() {
+		go func(name, entryPath string, isDir bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			fullPath := filepath.Join(path, de.Name())
 			var size int64
+			var lastAccess time.Time
+			var isCleanable bool
 
-			if de.IsDir() {
-				atomic.AddInt64(dirsScanned, 1)
-				size = getDirSize(fullPath, filesScanned, dirsScanned)
+			if isDir {
+				size = calculateDirSize(entryPath)
+				isCleanable = cleanablePatterns[name]
 			} else {
-				atomic.AddInt64(filesScanned, 1)
-				if info, err := de.Info(); err == nil {
+				info, err := os.Stat(entryPath)
+				if err == nil {
 					size = info.Size()
+					lastAccess = info.ModTime()
 				}
 			}
 
 			mu.Lock()
-			entries = append(entries, Entry{
-				Name:  de.Name(),
-				Path:  fullPath,
-				Size:  size,
-				IsDir: de.IsDir(),
+			defer mu.Unlock()
+
+			dirEntries = append(dirEntries, dirEntry{
+				Name:        name,
+				Path:        entryPath,
+				Size:        size,
+				IsDir:       isDir,
+				LastAccess:  lastAccess,
+				IsCleanable: isCleanable,
 			})
+
 			totalSize += size
-			mu.Unlock()
-		}()
+
+			// Track large files
+			if !isDir && size >= 100*1024*1024 {
+				largeFiles = append(largeFiles, fileEntry{
+					Name: name,
+					Path: entryPath,
+					Size: size,
+				})
+			}
+
+			atomic.AddInt64(&processedCount, 1)
+		}(name, entryPath, entry.IsDir())
 	}
 
 	wg.Wait()
 
 	// Sort by size descending
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Size > entries[j].Size
+	sort.Slice(dirEntries, func(i, j int) bool {
+		return dirEntries[i].Size > dirEntries[j].Size
 	})
 
-	return entries, totalSize, nil
+	sort.Slice(largeFiles, func(i, j int) bool {
+		return largeFiles[i].Size > largeFiles[j].Size
+	})
+
+	return dirEntries, largeFiles, totalSize, nil
 }
 
-// getDirSize calculates the total size of a directory
-func getDirSize(path string, filesScanned, dirsScanned *int64) int64 {
+// calculateDirSize calculates the size of a directory with timeout and limits
+// Uses shallow scanning for speed - estimates based on first few levels
+func calculateDirSize(path string) int64 {
+	ctx, cancel := context.WithTimeout(context.Background(), dirSizeTimeout)
+	defer cancel()
+
 	var size int64
+	var fileCount int64
 
-	filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // Skip errors
-		}
+	// Use a channel to signal completion
+	done := make(chan struct{})
 
-		if d.IsDir() {
-			atomic.AddInt64(dirsScanned, 1)
-		} else {
-			atomic.AddInt64(filesScanned, 1)
-			if info, err := d.Info(); err == nil {
-				size += info.Size()
-			}
-		}
-		return nil
-	})
+	go func() {
+		defer close(done)
+		quickScanDir(ctx, path, 0, &size, &fileCount)
+	}()
+
+	select {
+	case <-done:
+		// Completed normally
+	case <-ctx.Done():
+		// Timeout - return partial size (already accumulated)
+	}
 
 	return size
 }
 
-// humanizeBytes converts bytes to human-readable format
-func humanizeBytes(bytes int64) string {
+// quickScanDir does a fast shallow scan for size estimation
+func quickScanDir(ctx context.Context, path string, depth int, size *int64, fileCount *int64) {
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	// Limit depth for speed
+	if depth > shallowScanDepth {
+		return
+	}
+
+	// Limit total files scanned
+	if atomic.LoadInt64(fileCount) > maxFilesPerDir {
+		return
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		// Check cancellation
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		if atomic.LoadInt64(fileCount) > maxFilesPerDir {
+			return
+		}
+
+		entryPath := filepath.Join(path, entry.Name())
+
+		if entry.IsDir() {
+			name := entry.Name()
+			// Skip hidden and system directories
+			if skipPatterns[name] || (strings.HasPrefix(name, ".") && len(name) > 1) {
+				continue
+			}
+			quickScanDir(ctx, entryPath, depth+1, size, fileCount)
+		} else {
+			info, err := entry.Info()
+			if err == nil {
+				atomic.AddInt64(size, info.Size())
+				atomic.AddInt64(fileCount, 1)
+			}
+		}
+	}
+}
+
+// formatBytes formats bytes to human readable string
+func formatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
@@ -426,4 +761,61 @@ func humanizeBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// truncatePath truncates a path to fit in maxLen
+func truncatePath(path string, maxLen int) string {
+	if len(path) <= maxLen {
+		return path
+	}
+	return "..." + path[len(path)-maxLen+3:]
+}
+
+// openInExplorer opens a path in Windows Explorer
+func openInExplorer(path string) {
+	// Use explorer.exe to open the path
+	go func() {
+		exec.Command("explorer.exe", "/select,", path).Run()
+	}()
+}
+
+func main() {
+	var startPath string
+
+	flag.StringVar(&startPath, "path", "", "Path to analyze")
+	flag.Parse()
+
+	// Check environment variable
+	if startPath == "" {
+		startPath = os.Getenv("WINMOLE_ANALYZE_PATH")
+	}
+
+	// Use command line argument
+	if startPath == "" && len(flag.Args()) > 0 {
+		startPath = flag.Args()[0]
+	}
+
+	// Default to user profile
+	if startPath == "" {
+		startPath = os.Getenv("USERPROFILE")
+	}
+
+	// Resolve to absolute path
+	absPath, err := filepath.Abs(startPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Check if path exists
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error: Path does not exist: %s\n", absPath)
+		os.Exit(1)
+	}
+
+	p := tea.NewProgram(newModel(absPath), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }

@@ -39,14 +39,22 @@ function Clear-WindowsUpdateDownloads {
             return
         }
         
+        $wuService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
+        $wasRunning = $wuService -and $wuService.Status -eq 'Running'
+        
         try {
-            Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+            if ($wasRunning) {
+                Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+            }
             Clear-DirectoryContents -Path $wuPath -Description "Windows Update cache"
-            Start-Service -Name wuauserv -ErrorAction SilentlyContinue
         }
         catch {
             Write-Debug "Could not clear Windows Update cache: $_"
-            Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+        }
+        finally {
+            if ($wasRunning) {
+                Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+            }
         }
     }
 }
@@ -71,14 +79,22 @@ function Clear-DeliveryOptimizationCache {
             return
         }
         
+        $doService = Get-Service -Name DoSvc -ErrorAction SilentlyContinue
+        $wasRunning = $doService -and $doService.Status -eq 'Running'
+        
         try {
-            Stop-Service -Name DoSvc -Force -ErrorAction SilentlyContinue
+            if ($wasRunning) {
+                Stop-Service -Name DoSvc -Force -ErrorAction SilentlyContinue
+            }
             Clear-DirectoryContents -Path "$doPath\Cache" -Description "Delivery Optimization cache"
-            Start-Service -Name DoSvc -ErrorAction SilentlyContinue
         }
         catch {
             Write-Debug "Could not clear Delivery Optimization cache: $_"
-            Start-Service -Name DoSvc -ErrorAction SilentlyContinue
+        }
+        finally {
+            if ($wasRunning) {
+                Start-Service -Name DoSvc -ErrorAction SilentlyContinue
+            }
         }
     }
 }

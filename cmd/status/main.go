@@ -6,9 +6,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -185,23 +184,21 @@ func (c *Collector) Collect() MetricsSnapshot {
 		if partitions, err := disk.PartitionsWithContext(ctx, false); err == nil {
 			var disks []DiskInfo
 			for _, p := range partitions {
-				// Skip non-physical drives
-				if !strings.HasPrefix(p.Device, "C:") &&
-					!strings.HasPrefix(p.Device, "D:") &&
-					!strings.HasPrefix(p.Device, "E:") &&
-					!strings.HasPrefix(p.Device, "F:") {
-					continue
-				}
-				if usage, err := disk.UsageWithContext(ctx, p.Mountpoint); err == nil {
-					disks = append(disks, DiskInfo{
-						Device:      p.Device,
-						Mountpoint:  p.Mountpoint,
-						Total:       usage.Total,
-						Used:        usage.Used,
-						Free:        usage.Free,
-						UsedPercent: usage.UsedPercent,
-						Fstype:      p.Fstype,
-					})
+				// Include physical drives (drive letter format like "C:", "D:", etc.)
+				// Skip network drives and special mount points
+				if len(p.Device) >= 2 && p.Device[1] == ':' {
+					// It's a drive letter (A: through Z:)
+					if usage, err := disk.UsageWithContext(ctx, p.Mountpoint); err == nil {
+						disks = append(disks, DiskInfo{
+							Device:      p.Device,
+							Mountpoint:  p.Mountpoint,
+							Total:       usage.Total,
+							Used:        usage.Used,
+							Free:        usage.Free,
+							UsedPercent: usage.UsedPercent,
+							Fstype:      p.Fstype,
+						})
+					}
 				}
 			}
 			mu.Lock()
@@ -263,14 +260,10 @@ func (c *Collector) Collect() MetricsSnapshot {
 			}
 		}
 
-		// Sort by CPU usage
-		for i := 0; i < len(procInfos)-1; i++ {
-			for j := i + 1; j < len(procInfos); j++ {
-				if procInfos[j].CPU > procInfos[i].CPU {
-					procInfos[i], procInfos[j] = procInfos[j], procInfos[i]
-				}
-			}
-		}
+		// Sort by CPU usage using sort.Slice
+		sort.Slice(procInfos, func(i, j int) bool {
+			return procInfos[i].CPU > procInfos[j].CPU
+		})
 
 		// Take top 5
 		if len(procInfos) > 5 {
@@ -622,47 +615,6 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// getWindowsVersion gets detailed Windows version using PowerShell
-func getWindowsVersion() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "powershell", "-Command",
-		"(Get-CimInstance Win32_OperatingSystem).Caption")
-	output, err := cmd.Output()
-	if err != nil {
-		return "Windows"
-	}
-	return strings.TrimSpace(string(output))
-}
-
-// getBatteryInfo gets battery info on Windows (for laptops)
-func getBatteryInfo() (int, bool, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "powershell", "-Command",
-		"(Get-CimInstance Win32_Battery).EstimatedChargeRemaining")
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, false, false
-	}
-
-	percent, err := strconv.Atoi(strings.TrimSpace(string(output)))
-	if err != nil {
-		return 0, false, false
-	}
-
-	// Check if charging
-	cmdStatus := exec.CommandContext(ctx, "powershell", "-Command",
-		"(Get-CimInstance Win32_Battery).BatteryStatus")
-	statusOutput, _ := cmdStatus.Output()
-	status, _ := strconv.Atoi(strings.TrimSpace(string(statusOutput)))
-	isCharging := status == 2 // 2 = AC Power
-
-	return percent, isCharging, true
 }
 
 func main() {

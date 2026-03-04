@@ -178,7 +178,8 @@ type model struct {
 	showLargeFiles bool
 	multiSelected  map[string]bool
 	deleteConfirm  bool
-	deleteTarget   string
+	deleteTarget   string   // Display name for confirmation
+	deleteTargets  []string // Actual paths to delete (for multi-delete)
 	scanProgress   int64
 	scanTotal      int64
 	width          int
@@ -276,12 +277,22 @@ func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.deleteConfirm {
 		switch msg.String() {
 		case "y", "Y":
-			target := m.deleteTarget
 			m.deleteConfirm = false
+			if len(m.deleteTargets) > 0 {
+				// Multi-delete
+				targets := m.deleteTargets
+				m.deleteTargets = nil
+				m.deleteTarget = ""
+				return m, m.deletePaths(targets)
+			}
+			// Single delete
+			target := m.deleteTarget
+			m.deleteTarget = ""
 			return m, m.deletePath(target)
 		case "n", "N", "esc":
 			m.deleteConfirm = false
 			m.deleteTarget = ""
+			m.deleteTargets = nil
 			return m, nil
 		}
 		return m, nil
@@ -357,7 +368,13 @@ func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Delete all selected
 		if len(m.multiSelected) > 0 {
 			m.deleteConfirm = true
-			m.deleteTarget = fmt.Sprintf("%d items", len(m.multiSelected))
+			// Collect paths for deletion
+			var paths []string
+			for path := range m.multiSelected {
+				paths = append(paths, path)
+			}
+			m.deleteTargets = paths
+			m.deleteTarget = fmt.Sprintf("%d items", len(paths))
 		}
 	case "f":
 		m.showLargeFiles = !m.showLargeFiles
@@ -528,6 +545,30 @@ func (m model) deletePath(path string) tea.Cmd {
 
 		err := os.RemoveAll(path)
 		return deleteCompleteMsg{path: path, err: err}
+	}
+}
+
+// deletePaths deletes multiple files or directories with protection checks
+func (m model) deletePaths(paths []string) tea.Cmd {
+	return func() tea.Msg {
+		var errors []string
+		for _, path := range paths {
+			// Safety check: never delete protected paths
+			if isProtectedPath(path) {
+				errors = append(errors, fmt.Sprintf("protected: %s", path))
+				continue
+			}
+			if err := os.RemoveAll(path); err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", path, err))
+			}
+		}
+		if len(errors) > 0 {
+			return deleteCompleteMsg{
+				path: fmt.Sprintf("%d items", len(paths)),
+				err:  fmt.Errorf("failed to delete some items: %s", strings.Join(errors, "; ")),
+			}
+		}
+		return deleteCompleteMsg{path: fmt.Sprintf("%d items", len(paths)), err: nil}
 	}
 }
 

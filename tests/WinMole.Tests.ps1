@@ -297,7 +297,8 @@ Describe "Cleanup Modules" {
 
             Mock Get-AppxPackage { @() }
 
-            { $result = Get-InstalledPrograms } | Should -Not -Throw
+            { Get-InstalledPrograms | Out-Null } | Should -Not -Throw
+            $result = Get-InstalledPrograms
             @($result).Count | Should -Be 3
             @($result | Where-Object { $_.DisplayName -eq "Named App" }).Count | Should -Be 3
         }
@@ -315,9 +316,9 @@ Describe "Integration Tests" -Tag "Integration" {
             $env:WINMOLE_DRY_RUN = "1"
             try {
                 # This should not actually delete anything
-                $output = & (Join-Path $script:BIN_DIR "clean.ps1") -User -DryRun 2>&1
-                # Should complete without error
-                $LASTEXITCODE | Should -BeIn @(0, $null)
+                $output = & (Join-Path $script:BIN_DIR "clean.ps1") -User -DryRun 2>&1 | Out-String
+                $output | Should -Not -Match "An error occurred"
+                $output | Should -Not -Match "is not recognized as"
             }
             finally {
                 Remove-Item Env:WINMOLE_DRY_RUN -ErrorAction SilentlyContinue

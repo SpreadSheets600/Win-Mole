@@ -273,6 +273,38 @@ Describe "Commands" {
 }
 
 # ============================================================================
+# Cleanup Module Tests
+# ============================================================================
+
+Describe "Cleanup Modules" {
+
+    BeforeAll {
+        . "$script:LIB_DIR\clean\apps.ps1"
+    }
+
+    Context "Get-InstalledPrograms" {
+        It "ignores registry entries without DisplayName under strict mode" {
+            Mock Get-ItemProperty {
+                @(
+                    [pscustomobject]@{ Publisher = "NoName Publisher" }
+                    [pscustomobject]@{
+                        DisplayName     = "Named App"
+                        InstallLocation = "C:\Tools\NamedApp"
+                        Publisher       = "Named Publisher"
+                    }
+                )
+            }
+
+            Mock Get-AppxPackage { @() }
+
+            { $result = Get-InstalledPrograms } | Should -Not -Throw
+            @($result).Count | Should -Be 3
+            @($result | Where-Object { $_.DisplayName -eq "Named App" }).Count | Should -Be 3
+        }
+    }
+}
+
+# ============================================================================
 # Integration Tests
 # ============================================================================
 
@@ -286,6 +318,30 @@ Describe "Integration Tests" -Tag "Integration" {
                 $output = & (Join-Path $script:BIN_DIR "clean.ps1") -User -DryRun 2>&1
                 # Should complete without error
                 $LASTEXITCODE | Should -BeIn @(0, $null)
+            }
+            finally {
+                Remove-Item Env:WINMOLE_DRY_RUN -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "clean browser dry run completes" {
+            $env:WINMOLE_DRY_RUN = "1"
+            try {
+                $output = & (Join-Path $script:BIN_DIR "clean.ps1") -Browsers -DryRun 2>&1 | Out-String
+                $output | Should -Not -Match "is not recognized as"
+                $output | Should -Not -Match "An error occurred"
+            }
+            finally {
+                Remove-Item Env:WINMOLE_DRY_RUN -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "clean developer dry run completes" {
+            $env:WINMOLE_DRY_RUN = "1"
+            try {
+                $output = & (Join-Path $script:BIN_DIR "clean.ps1") -Dev -DryRun 2>&1 | Out-String
+                $output | Should -Not -Match "is not recognized as"
+                $output | Should -Not -Match "An error occurred"
             }
             finally {
                 Remove-Item Env:WINMOLE_DRY_RUN -ErrorAction SilentlyContinue

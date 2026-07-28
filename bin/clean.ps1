@@ -76,6 +76,117 @@ function Show-CleanHelp {
 }
 
 # ============================================================================
+# Compatibility
+# ============================================================================
+
+function Invoke-UserCacheCleanup {
+    <#
+    .SYNOPSIS
+        Run user cache cleanup across mixed install versions.
+    #>
+
+    if (Get-Command -Name "Clear-UserCaches" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-UserCaches
+        return
+    }
+
+    Start-Section "User caches"
+
+    if (Get-Command -Name "Clear-ThumbnailCache" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-ThumbnailCache
+    }
+
+    if (Get-Command -Name "Clear-ClipboardHistory" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-ClipboardHistory
+    }
+
+    Stop-Section
+}
+
+function Invoke-BrowserCacheCleanup {
+    <#
+    .SYNOPSIS
+        Run browser cache cleanup across mixed module versions.
+    #>
+
+    if (Get-Command -Name "Clear-BrowserCaches" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-BrowserCaches
+        return
+    }
+
+    if (Get-Command -Name "Clear-BrowserCacheFiles" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-BrowserCacheFiles
+    }
+}
+
+function Invoke-ApplicationCacheCleanup {
+    <#
+    .SYNOPSIS
+        Run application cache cleanup across mixed module versions.
+    #>
+
+    if (Get-Command -Name "Clear-ApplicationCaches" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-ApplicationCaches
+        return
+    }
+
+    if (Get-Command -Name "Clear-CommonAppCaches" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-CommonAppCaches
+    }
+}
+
+function Invoke-WindowsUpdateCleanup {
+    <#
+    .SYNOPSIS
+        Run Windows Update cache cleanup across mixed module versions.
+    #>
+
+    if (Get-Command -Name "Clear-WindowsUpdateCache" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-WindowsUpdateCache
+        return
+    }
+
+    if (Get-Command -Name "Clear-WindowsUpdateDownloads" -CommandType Function -ErrorAction SilentlyContinue) {
+        Clear-WindowsUpdateDownloads
+    }
+}
+
+function Invoke-DeveloperCleanup {
+    <#
+    .SYNOPSIS
+        Run developer cache cleanup across mixed module versions.
+    #>
+
+    if (Get-Command -Name "Invoke-DevCleanup" -CommandType Function -ErrorAction SilentlyContinue) {
+        Invoke-DevCleanup -All
+        return
+    }
+
+    if (Get-Command -Name "Invoke-DevToolsCleanup" -CommandType Function -ErrorAction SilentlyContinue) {
+        Invoke-DevToolsCleanup
+    }
+}
+
+function Invoke-SystemCleanupCompat {
+    <#
+    .SYNOPSIS
+        Run system cleanup across mixed module versions.
+    #>
+
+    if (Get-Command -Name "Invoke-SystemCleanup" -CommandType Function -ErrorAction SilentlyContinue) {
+        $command = Get-Command -Name "Invoke-SystemCleanup" -CommandType Function -ErrorAction SilentlyContinue
+        $hasAllParameter = $command -and $command.Parameters.ContainsKey("All")
+
+        if ($hasAllParameter) {
+            Invoke-SystemCleanup -All
+        }
+        else {
+            Invoke-SystemCleanup -IncludeComponentStore -IncludeDiskCleanup
+        }
+    }
+}
+
+# ============================================================================
 # Interactive Mode
 # ============================================================================
 
@@ -222,16 +333,16 @@ function Main {
     
     # Run cleanups
     if ($cleanUser) {
-        Clear-UserCaches
+        Invoke-UserCacheCleanup
         Clear-UserLogs
     }
     
     if ($cleanBrowsers) {
-        Clear-BrowserCaches
+        Invoke-BrowserCacheCleanup
     }
     
     if ($cleanApps) {
-        Clear-ApplicationCaches
+        Invoke-ApplicationCacheCleanup
         # Extended app cleanup: productivity, creative, gaming platform caches
         Invoke-AppCleanup
     }
@@ -251,12 +362,12 @@ function Main {
     }
     
     if ($cleanDev) {
-        Invoke-DevCleanup -All
+        Invoke-DeveloperCleanup
     }
     
     if ($cleanSystem) {
         if (Test-IsAdmin) {
-            Invoke-SystemCleanup -All
+            Invoke-SystemCleanupCompat
         }
         else {
             Write-WinMoleWarning "System cleanup requires admin - skipping"
@@ -270,7 +381,7 @@ function Main {
     
     if ($cleanWinUpdate) {
         if (Test-IsAdmin) {
-            Clear-WindowsUpdateCache
+            Invoke-WindowsUpdateCleanup
         }
         else {
             Write-WinMoleWarning "Windows Update cleanup requires admin - skipping"

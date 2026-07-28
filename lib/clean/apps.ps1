@@ -34,7 +34,10 @@ function Get-InstalledPrograms {
     
     foreach ($path in $registryPaths) {
         $items = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue |
-                 Where-Object { $_.DisplayName } |
+                 Where-Object {
+                     $_.PSObject.Properties.Match('DisplayName').Count -gt 0 -and
+                     -not [string]::IsNullOrWhiteSpace($_.DisplayName)
+                 } |
                  Select-Object DisplayName, InstallLocation, Publisher
         if ($items) {
             $programs += $items

@@ -1,0 +1,95 @@
+- name: bug
+  color: "d73a4a"
+  description: Something is not working
+
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or request
+
+- name: question
+  color: "d876e3"
+  description: Further information is requested
+
+- name: documentation
+  color: "0075ca"
+  description: Improvements or additions to documentation
+
+- name: security
+  color: "b60205"
+  description: Security-related issue or update
+
+- name: dependencies
+  color: "0366d6"
+  description: Dependency updates
+
+- name: good first issue
+  color: "7057ff"
+  description: Good for newcomers
+
+- name: help wanted
+  color: "008672"
+  description: Extra attention is needed
+
+- name: go
+  color: "00ADD8"
+  description: Go language related
+
+- name: github-actions
+  color: "2088FF"
+  description: GitHub Actions workflow related
+
+- name: powershell
+  color: "012456"
+  description: PowerShell script related
+
+# Triage labels. Kept here so the label set is reproducible rather than existing
+# only as manual edits in the GitHub UI. sync-labels.yml runs with
+# delete-other-labels: false, so adding entries here is additive and safe.
+
+- name: "priority: critical"
+  color: "b60205"
+  description: Silently wrong results or data loss risk; fix before next release
+
+- name: "priority: high"
+  color: "d93f0b"
+  description: User-facing breakage; fix soon
+
+- name: "priority: medium"
+  color: "fbca04"
+  description: Worth fixing, not urgent
+
+- name: "priority: low"
+  color: "0e8a16"
+  description: Nice to have
+
+- name: "area: clean"
+  color: "1d76db"
+  description: bin/clean.ps1 and lib/clean/*
+
+- name: "area: analyze"
+  color: "1d76db"
+  description: cmd/analyze disk analyzer
+
+- name: "area: core"
+  color: "1d76db"
+  description: lib/core/* shared helpers
+
+- name: "area: ci"
+  color: "1d76db"
+  description: GitHub Actions, tests, tooling
+
+- name: "area: packaging"
+  color: "1d76db"
+  description: Installers, releases, distribution
+
+- name: "needs rebase"
+  color: "e99695"
+  description: Stale against master or conflicts with another PR
+
+- name: "stale ci"
+  color: "e99695"
+  description: CI signal expired or never ran; needs re-run
+
+- name: "tech debt"
+  color: "c5def5"
+  description: Structural cleanup, no behaviour change

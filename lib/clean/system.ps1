@@ -102,9 +102,13 @@ function Clear-WindowsUpdateFiles {
         return
     }
 
-    # Stop Windows Update service
+    # Stop Windows Update service. The null check is required: if wuauserv is
+    # absent or Get-Service is denied, $wuService is $null, and under StrictMode a
+    # property access on $null throws. This line sits outside the try/finally
+    # below, so with $ErrorActionPreference = "Stop" that would abort the whole
+    # cleanup run partway through.
     $wuService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
-    $wasRunning = $wuService.Status -eq 'Running'
+    $wasRunning = $wuService -and $wuService.Status -eq 'Running'
 
     if ($wasRunning) {
         if (Test-DryRunMode) {

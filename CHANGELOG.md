@@ -32,16 +32,25 @@ First tagged release.
   under StrictMode after earlier deletions had already been committed. (#19)
 - `Get-InstalledPrograms` no longer throws on registry entries that have no
   `DisplayName`. (#11)
+- `analyze` reports true directory sizes. Size walks stopped at depth 3, the
+  system-directory skip list was matched against the bare folder name at every
+  level (silently excluding `AppData\Local\Microsoft\Windows`), dot-directories
+  were skipped, and a 500 ms / 10,000-file budget per directory returned partial
+  results as if they were totals. Directory listings also dropped `Windows` and
+  `Program Files` entirely, which is why whole-drive usage read far below
+  Explorer. Trees are now walked to full depth with junctions and symlinks
+  skipped, so nothing is double-counted or loops. Scans that are still cut short
+  are marked `+` with a `≥` total rather than reported as exact. (#13)
 
 ### Added
 
 - `Clear-UserCaches`, so `clean -User` works. (#12)
 - A Pester regression test for `Get-InstalledPrograms` under StrictMode. (#11)
+- Go test coverage for the disk analyzer, one case per root cause above plus a
+  test pinning that protected system paths still refuse deletion. (#15)
 
 ### Known issues
 
-- `analyze` under-reports directory sizes and omits some directories. A fix is
-  open in #15 and will ship in the next release. (#13)
 - Progress bars in `purge` and `uninstall` are stuck at 0%, because a helper in
   `lib/core/log.ps1` shadows the built-in `Write-Progress` with an incompatible
   signature. (#18)

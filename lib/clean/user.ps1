@@ -108,8 +108,11 @@ function Clear-RecycleBin {
                 if ($size) { $totalSize += $size }
             }
             
-            # Clear using Clear-RecycleBin cmdlet (Windows 10+)
-            Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+            # Must be module-qualified: this function is itself named
+            # Clear-RecycleBin, and functions take precedence over cmdlets, so an
+            # unqualified call recurses into this function instead of reaching the
+            # built-in cmdlet and the bin is never emptied.
+            Microsoft.PowerShell.Management\Clear-RecycleBin -Force -ErrorAction SilentlyContinue
             
             $sizeHuman = Format-ByteSize -Bytes $totalSize
             Write-Success "Recycle Bin $($script:Colors.Green)($sizeHuman)$($script:Colors.NC)"

@@ -3,7 +3,7 @@
 *Deep clean and optimize your Windows PC.*
 
 [![Stars](https://img.shields.io/github/stars/bhadraagada/winmole?style=flat-square)](https://github.com/bhadraagada/winmole/stargazers)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg?style=flat-square)](LICENSE)
 [![Tests](https://img.shields.io/github/actions/workflow/status/bhadraagada/winmole/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/bhadraagada/winmole/actions)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-blue?style=flat-square&logo=powershell)](https://docs.microsoft.com/en-us/powershell/)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
@@ -236,11 +236,21 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file for details.
+GNU General Public License v3.0 - See [LICENSE](LICENSE) for the full text.
+
+WinMole is a derivative work of [Mole](https://github.com/tw93/Mole), which is
+licensed under GPL-3.0, so WinMole is distributed under the same license.
 
 ## Credits
 
-Windows port of [Mole](https://github.com/tw93/Mole) for macOS by [tw93](https://github.com/tw93).
+WinMole is derived from [Mole](https://github.com/tw93/Mole) by
+[tw93](https://github.com/tw93) - specifically its
+[`windows` branch](https://github.com/tw93/Mole/tree/windows) - and adapted for
+Windows with PowerShell 5.1 support.
+
+Changes from upstream include a flag-based `clean` dispatcher, restructured
+cleanup modules, a rewritten disk-size scanner, and an added Pester and Go test
+suite. Upstream Mole remains the original work; please star it too.
 
 ---
 

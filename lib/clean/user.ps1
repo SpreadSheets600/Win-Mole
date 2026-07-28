@@ -307,6 +307,24 @@ function Clear-ClipboardHistory {
 }
 
 # ============================================================================
+# User Caches Cleanup
+# ============================================================================
+
+function Clear-UserCaches {
+    <#
+    .SYNOPSIS
+        Clean user-level caches (thumbnail, icon, clipboard)
+    #>
+    
+    Start-Section "User caches"
+    
+    Clear-ThumbnailCache
+    Clear-ClipboardHistory
+    
+    Stop-Section
+}
+
+# ============================================================================
 # Main User Cleanup Function
 # ============================================================================
 

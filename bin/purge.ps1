@@ -213,9 +213,8 @@ function Find-Projects {
 
     foreach ($searchPath in $SearchPaths) {
         $pathCount++
-        Write-Progress -Activity "Scanning for projects" `
-            -Status "Searching: $searchPath" `
-            -PercentComplete (($pathCount / $totalPaths) * 100)
+        Write-ProgressBar -Current $pathCount -Total $totalPaths `
+            -Message "Searching: $searchPath"
 
         foreach ($marker in $projectMarkers) {
             try {
@@ -256,7 +255,7 @@ function Find-Projects {
         }
     }
 
-    Write-Progress -Activity "Scanning for projects" -Completed
+    Complete-Progress
 
     # Sort by size (largest first)
     return $projects | Sort-Object -Property TotalSizeKB -Descending

@@ -35,6 +35,21 @@ jobs:
           }
           Write-Host "All PowerShell scripts are syntactically valid" -ForegroundColor Green
 
+  commands:
+    name: Command Resolution
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # A call to a nonexistent function, or one passing an undeclared
+      # parameter, is valid syntax and passes the check above. It only fails when
+      # that branch runs, which is how #14 survived on master for months.
+      - name: Check every command and parameter resolves
+        shell: pwsh
+        run: pwsh -NoProfile -File ./scripts/check-commands.ps1
+
   go-build:
     name: Go Build
     runs-on: windows-latest

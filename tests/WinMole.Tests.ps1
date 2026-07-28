@@ -306,6 +306,59 @@ Describe "Cleanup Modules" {
 }
 
 # ============================================================================
+# Progress Bar - regression tests for #18
+# ============================================================================
+
+Describe "Progress Bar - log.ps1" {
+
+    BeforeAll {
+        . "$script:LIB_DIR\core\base.ps1"
+        . "$script:LIB_DIR\core\log.ps1"
+    }
+
+    Context "cmdlet shadowing" {
+        It "does not shadow the built-in Write-Progress cmdlet" {
+            # A function named Write-Progress outranks the cmdlet for every script
+            # that dot-sources log.ps1, silently swallowing -Activity/-Status/
+            # -PercentComplete into $args and freezing the bar at 0%.
+            (Get-Command Write-Progress).CommandType | Should -Be 'Cmdlet'
+        }
+
+        It "exposes the helper under a non-colliding name" {
+            (Get-Command Write-ProgressBar).CommandType | Should -Be 'Function'
+        }
+    }
+
+    Context "Write-ProgressBar" {
+        It "renders a percentage that tracks Current over Total" {
+            $rendered = Write-ProgressBar -Current 7 -Total 10 -Message "x" 6>&1 | Out-String
+            $rendered | Should -Match '70%'
+        }
+
+        It "renders 0% when Total is zero rather than dividing by zero" {
+            { Write-ProgressBar -Current 0 -Total 0 6>&1 | Out-Null } | Should -Not -Throw
+            $rendered = Write-ProgressBar -Current 0 -Total 0 6>&1 | Out-String
+            $rendered | Should -Match '0%'
+        }
+
+        It "does not throw when Current exceeds Total" {
+            # Clamping matters because '=' * -1 throws, and callers discover
+            # additional items partway through a scan.
+            { Write-ProgressBar -Current 15 -Total 10 6>&1 | Out-Null } | Should -Not -Throw
+        }
+    }
+
+    Context "Complete-Progress" {
+        It "clears the line without emitting literal plus signs" {
+            # The body concatenates inside parentheses; without them PowerShell
+            # parses it in argument mode and prints "+" between each part.
+            $rendered = Complete-Progress 6>&1 | Out-String
+            $rendered | Should -Not -Match '\+'
+        }
+    }
+}
+
+# ============================================================================
 # Integration Tests
 # ============================================================================
 

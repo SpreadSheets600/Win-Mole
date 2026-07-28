@@ -14,17 +14,19 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Scanning limits to prevent infinite scanning
+// Scanning limits. These are runaway guards, not accuracy trade-offs: a
+// directory is walked to its full depth so reported sizes match Explorer.
+// Sibling directories are sized concurrently, so the timeout below bounds
+// wall-clock time for the whole listing, not the sum of its entries.
 const (
-	dirSizeTimeout   = 500 * time.Millisecond // Max time to calculate a single directory size
-	maxFilesPerDir   = 10000                  // Max files to scan per directory
-	maxScanDepth     = 10                     // Max recursion depth (shallow scan)
-	shallowScanDepth = 3                      // Depth for quick size estimation
+	dirSizeTimeout = 15 * time.Second // Max time to size a single directory
+	maxFilesPerDir = 2000000          // Runaway guard on files per directory tree
 )
 
 // ANSI color codes
@@ -150,6 +152,7 @@ type dirEntry struct {
 	IsDir       bool
 	LastAccess  time.Time
 	IsCleanable bool
+	Partial     bool // Size is a lower bound: the walk hit the timeout or an unreadable subtree
 }
 
 type fileEntry struct {
@@ -426,8 +429,21 @@ func (m model) View() string {
 		b.WriteString("\n")
 	}
 
-	// Total size
-	b.WriteString(fmt.Sprintf("  Total: %s%s%s\n", colorYellow, formatBytes(m.totalSize), colorReset))
+	// Total size. Flag it as a lower bound when any child was truncated, so an
+	// under-count is visible rather than silently wrong.
+	anyPartial := false
+	for _, e := range m.entries {
+		if e.Partial {
+			anyPartial = true
+			break
+		}
+	}
+	if anyPartial {
+		b.WriteString(fmt.Sprintf("  Total: %s≥ %s%s %s(+ = partial: timed out or unreadable)%s\n",
+			colorYellow, formatBytes(m.totalSize), colorReset, colorGray, colorReset))
+	} else {
+		b.WriteString(fmt.Sprintf("  Total: %s%s%s\n", colorYellow, formatBytes(m.totalSize), colorReset))
+	}
 	b.WriteString("\n")
 
 	// Large files toggle
@@ -491,10 +507,15 @@ func (m model) View() string {
 			nameColor = colorCyanBold
 		}
 
+		sizeText := formatBytes(entry.Size)
+		if entry.Partial {
+			sizeText += "+"
+		}
+
 		b.WriteString(fmt.Sprintf("%s%s %s%8s%s %s%s%s %s%.1f%%%s %s\n",
 			prefix,
 			icon,
-			colorYellow, formatBytes(entry.Size), colorReset,
+			colorYellow, sizeText, colorReset,
 			colorGray, bar, colorReset,
 			colorDim, pct, colorReset,
 			nameColor+entry.Name+colorReset,
@@ -599,10 +620,9 @@ func scanDirectory(path string) ([]dirEntry, []fileEntry, int64, error) {
 		name := entry.Name()
 		entryPath := filepath.Join(path, name)
 
-		// Skip system directories
-		if skipPatterns[name] {
-			continue
-		}
+		// System directories are listed and measured like any other. Excluding
+		// them here made the reported total fall far below what Explorer shows;
+		// deletion is guarded separately by isProtectedPath.
 
 		wg.Add(1)
 		sem <- struct{}{}
@@ -614,9 +634,10 @@ func scanDirectory(path string) ([]dirEntry, []fileEntry, int64, error) {
 			var size int64
 			var lastAccess time.Time
 			var isCleanable bool
+			var partial bool
 
 			if isDir {
-				size = calculateDirSize(entryPath)
+				size, partial = calculateDirSize(entryPath)
 				isCleanable = cleanablePatterns[name]
 			} else {
 				info, err := os.Stat(entryPath)
@@ -636,6 +657,7 @@ func scanDirectory(path string) ([]dirEntry, []fileEntry, int64, error) {
 				IsDir:       isDir,
 				LastAccess:  lastAccess,
 				IsCleanable: isCleanable,
+				Partial:     partial,
 			})
 
 			totalSize += size
@@ -667,21 +689,34 @@ func scanDirectory(path string) ([]dirEntry, []fileEntry, int64, error) {
 	return dirEntries, largeFiles, totalSize, nil
 }
 
-// calculateDirSize calculates the size of a directory with timeout and limits
-// Uses shallow scanning for speed - estimates based on first few levels
-func calculateDirSize(path string) int64 {
+// isReparsePoint reports whether info describes a junction, symlink or other
+// reparse point. Recursing into these double-counts space and can loop forever:
+// %LOCALAPPDATA%\Application Data is a junction back to its own parent.
+func isReparsePoint(info os.FileInfo) bool {
+	if d, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
+		return d.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	}
+	// Fall back to the portable bit if the Windows attributes are unavailable.
+	return info.Mode()&os.ModeSymlink != 0
+}
+
+// calculateDirSize returns the total size of a directory tree. The second
+// result reports whether the walk was cut short by the timeout or the file
+// guard, in which case the size is a lower bound rather than the real total.
+func calculateDirSize(path string) (int64, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), dirSizeTimeout)
 	defer cancel()
 
 	var size int64
 	var fileCount int64
+	var truncated atomic.Bool
 
 	// Use a channel to signal completion
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		quickScanDir(ctx, path, 0, &size, &fileCount)
+		walkDirSize(ctx, path, &size, &fileCount, &truncated)
 	}()
 
 	select {
@@ -689,32 +724,38 @@ func calculateDirSize(path string) int64 {
 		// Completed normally
 	case <-ctx.Done():
 		// Timeout - return partial size (already accumulated)
+		truncated.Store(true)
 	}
 
-	return size
+	return atomic.LoadInt64(&size), truncated.Load()
 }
 
-// quickScanDir does a fast shallow scan for size estimation
-func quickScanDir(ctx context.Context, path string, depth int, size *int64, fileCount *int64) {
+// walkDirSize sums every file in a directory tree. It walks to full depth and
+// does not filter by name: skipPatterns exists to keep the *delete* path away
+// from system directories, and applying it here was hiding real space (for
+// example AppData\Local\Microsoft\Windows, which matched the bare name
+// "Windows" at every level). Dot-directories are counted too; .gradle, .nuget
+// and friends are often the largest thing in a user profile.
+func walkDirSize(ctx context.Context, path string, size *int64, fileCount *int64, truncated *atomic.Bool) {
 	// Check context cancellation
 	select {
 	case <-ctx.Done():
+		truncated.Store(true)
 		return
 	default:
 	}
 
-	// Limit depth for speed
-	if depth > shallowScanDepth {
-		return
-	}
-
 	// Limit total files scanned
 	if atomic.LoadInt64(fileCount) > maxFilesPerDir {
+		truncated.Store(true)
 		return
 	}
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
+		// Unreadable subtree (permissions, locked file): its contents are
+		// missing from the total, so the caller must not trust the number.
+		truncated.Store(true)
 		return
 	}
 
@@ -722,29 +763,32 @@ func quickScanDir(ctx context.Context, path string, depth int, size *int64, file
 		// Check cancellation
 		select {
 		case <-ctx.Done():
+			truncated.Store(true)
 			return
 		default:
 		}
 
 		if atomic.LoadInt64(fileCount) > maxFilesPerDir {
+			truncated.Store(true)
 			return
 		}
 
 		entryPath := filepath.Join(path, entry.Name())
 
+		info, err := entry.Info()
+		if err != nil {
+			truncated.Store(true)
+			continue
+		}
+
 		if entry.IsDir() {
-			name := entry.Name()
-			// Skip hidden and system directories
-			if skipPatterns[name] || (strings.HasPrefix(name, ".") && len(name) > 1) {
+			if isReparsePoint(info) {
 				continue
 			}
-			quickScanDir(ctx, entryPath, depth+1, size, fileCount)
+			walkDirSize(ctx, entryPath, size, fileCount, truncated)
 		} else {
-			info, err := entry.Info()
-			if err == nil {
-				atomic.AddInt64(size, info.Size())
-				atomic.AddInt64(fileCount, 1)
-			}
+			atomic.AddInt64(size, info.Size())
+			atomic.AddInt64(fileCount, 1)
 		}
 	}
 }

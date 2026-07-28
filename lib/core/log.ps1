@@ -252,26 +252,42 @@ function Stop-Spinner {
 # Progress Bar
 # ============================================================================
 
-function Write-Progress {
+# Deliberately NOT named Write-Progress. Functions outrank cmdlets in PowerShell
+# command resolution, so a function by that name silently shadows the built-in
+# cmdlet for every script that dot-sources this file. Callers passing the
+# cmdlet's parameters (-Activity/-Status/-PercentComplete) then bound here
+# instead, and because the function was not an advanced function those arguments
+# were absorbed into $args and discarded, leaving the bar frozen at 0%.
+function Write-ProgressBar {
     <#
     .SYNOPSIS
-        Write a progress bar
+        Write an inline progress bar
+    .PARAMETER Current
+        Items completed so far.
+    .PARAMETER Total
+        Total items expected. Values below 1 render as 0%.
     #>
+    [CmdletBinding()]
     param(
         [int]$Current,
         [int]$Total,
         [string]$Message = "",
         [int]$Width = 30
     )
-    
+
     $percent = if ($Total -gt 0) { [Math]::Round(($Current / $Total) * 100) } else { 0 }
+
+    # Clamp before building the bar: "=" * -1 throws, and $Current can exceed
+    # $Total when a caller discovers more items partway through a scan.
     $filled = [Math]::Round(($Width * $Current) / [Math]::Max($Total, 1))
+    if ($filled -lt 0) { $filled = 0 }
+    if ($filled -gt $Width) { $filled = $Width }
     $empty = $Width - $filled
-    
+
     $bar = ("[" + ("=" * $filled) + (" " * $empty) + "]")
     $cyan = $script:Colors.Cyan
     $nc = $script:Colors.NC
-    
+
     Write-Host -NoNewline "`r  ${cyan}$bar${nc} ${percent}% $Message    "
 }
 
@@ -280,7 +296,10 @@ function Complete-Progress {
     .SYNOPSIS
         Clear the progress bar line
     #>
-    Write-Host -NoNewline "`r" + (" " * 80) + "`r"
+    # The parentheses are required. Without them PowerShell parses this in
+    # argument mode and passes "`r", "+", the spaces, "+", "`r" as five separate
+    # arguments, printing literal plus signs instead of clearing the line.
+    Write-Host -NoNewline ("`r" + (" " * 80) + "`r")
 }
 
 # ============================================================================

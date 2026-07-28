@@ -133,7 +133,9 @@ function Get-InstalledApplications {
 
     foreach ($path in $registryPaths) {
         $count++
-        Write-Progress -Activity "Scanning applications" -Status "Registry path $count of $total" -PercentComplete (($count / $total) * 50)
+        # Registry scanning is the first half of the overall scan, so the total is
+        # doubled to keep this stage within 0-50%, matching the previous intent.
+        Write-ProgressBar -Current $count -Total ($total * 2) -Message "Registry path $count of $total"
 
         try {
             $regItems = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
@@ -203,7 +205,7 @@ function Get-InstalledApplications {
     }
 
     # UWP / Store Apps
-    Write-Progress -Activity "Scanning applications" -Status "Scanning Windows Apps" -PercentComplete 75
+    Write-ProgressBar -Current 3 -Total 4 -Message "Scanning Windows Apps"
 
     try {
         $uwpApps = Get-AppxPackage -ErrorAction SilentlyContinue |
@@ -249,7 +251,7 @@ function Get-InstalledApplications {
         Write-Debug "Could not enumerate UWP apps: $_"
     }
 
-    Write-Progress -Activity "Scanning applications" -Completed
+    Complete-Progress
 
     # Sort by size (largest first)
     $apps = $apps | Sort-Object -Property SizeKB -Descending

@@ -27,7 +27,7 @@ $script:LIB_DIR = Join-Path $script:ROOT "lib"
 $script:TESTS_DIR = Join-Path $script:ROOT "tests"
 
 $script:GO_TOOLS = @("analyze", "status")
-$script:VERSION = "1.0.0"
+$script:VERSION = "0.1.1"
 
 # Colors
 $script:Colors = @{

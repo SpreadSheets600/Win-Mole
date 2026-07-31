@@ -19,7 +19,7 @@ Set-StrictMode -Version Latest
 # Configuration
 # ============================================================================
 
-$script:VERSION = "1.0.0"
+$script:VERSION = "0.1.1"
 $script:SourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:ShortcutName = "WinMole"
 

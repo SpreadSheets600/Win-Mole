@@ -36,8 +36,8 @@ $script:WINMOLE_ROOT_DIR = Split-Path -Parent $script:WINMOLE_LIB_DIR
 # Version Information
 # ============================================================================
 
-$script:WINMOLE_VERSION = "0.1.0"
-$script:WINMOLE_BUILD_DATE = "2026-07-28"
+$script:WINMOLE_VERSION = "0.1.1"
+$script:WINMOLE_BUILD_DATE = "2026-07-31"
 
 function Get-WinMoleVersion {
     <#

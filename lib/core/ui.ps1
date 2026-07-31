@@ -60,6 +60,45 @@ function Move-CursorDown {
     Write-Host -NoNewline "$([char]27)[$Lines`B"
 }
 
+function Write-MenuFrame {
+    <#
+    .SYNOPSIS
+        Render a frame of an interactive menu in place
+    .DESCRIPTION
+        Writes the given lines as a single buffered block. When PreviousLineCount
+        is greater than zero, the cursor is first moved back to the start of the
+        previous frame and everything below is cleared, so the new frame
+        overwrites the old one instead of stacking below it. This avoids
+        Clear-Host, which is a no-op in some terminal hosts and causes
+        full-screen flicker in the rest.
+    .PARAMETER Lines
+        The lines making up the frame
+    .PARAMETER PreviousLineCount
+        Number of lines the previous frame occupied (0 for the first frame)
+    .OUTPUTS
+        [int] The number of lines rendered; pass it back on the next call
+    #>
+    param(
+        [array]$Lines = @(),
+        [int]$PreviousLineCount = 0
+    )
+
+    $esc = [char]27
+    $sb = [System.Text.StringBuilder]::new()
+
+    if ($PreviousLineCount -gt 0) {
+        # Cursor to start of the previous frame's first line, then clear to end of screen
+        [void]$sb.Append("$esc[${PreviousLineCount}F$esc[0J")
+    }
+
+    foreach ($line in $Lines) {
+        [void]$sb.Append([string]$line).Append("`n")
+    }
+
+    Write-Host -NoNewline $sb.ToString()
+    return @($Lines).Count
+}
+
 # ============================================================================
 # Confirmation Dialogs
 # ============================================================================
@@ -154,31 +193,35 @@ function Show-Menu {
     
     # Hide cursor
     Write-Host -NoNewline "$([char]27)[?25l"
-    
+
+    $frameLines = 0
+
     try {
         while ($true) {
-            # Clear screen and show menu
-            Clear-Host
-            
-            Write-Host ""
-            Write-Host "  ${purple}$($script:Icons.Arrow) $Title${nc}"
-            Write-Host ""
-            
+            # Build the frame and render it in place over the previous one
+            $lines = @(
+                ""
+                "  ${purple}$($script:Icons.Arrow) $Title${nc}"
+                ""
+            )
+
             for ($i = 0; $i -le $maxIndex; $i++) {
                 $option = $Options[$i]
                 $name = if ($option -is [hashtable]) { $option.Name } else { $option.ToString() }
                 $desc = if ($option -is [hashtable] -and $option.Description) { " - $($option.Description)" } else { "" }
-                
+
                 if ($i -eq $selected) {
-                    Write-Host "  ${cyan}> $name${nc}${gray}$desc${nc}"
+                    $lines += "  ${cyan}> $name${nc}${gray}$desc${nc}"
                 }
                 else {
-                    Write-Host "    $name${gray}$desc${nc}"
+                    $lines += "    $name${gray}$desc${nc}"
                 }
             }
-            
-            Write-Host ""
-            Write-Host "  ${gray}Use arrows or j/k to navigate, Enter to select, q to quit${nc}"
+
+            $lines += ""
+            $lines += "  ${gray}Use arrows or j/k to navigate, Enter to select, q to quit${nc}"
+
+            $frameLines = Write-MenuFrame -Lines $lines -PreviousLineCount $frameLines
             
             # Read key - handle both VirtualKeyCode and escape sequences
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -267,34 +310,39 @@ function Show-SelectionList {
     $nc = $script:Colors.NC
     
     Write-Host -NoNewline "$([char]27)[?25l"
-    
+
+    $frameLines = 0
+
     try {
         while ($true) {
-            Clear-Host
-            
-            Write-Host ""
-            Write-Host "  ${purple}$($script:Icons.Arrow) $Title${nc}"
+            # Build the frame and render it in place over the previous one
+            $lines = @(
+                ""
+                "  ${purple}$($script:Icons.Arrow) $Title${nc}"
+            )
             if ($MultiSelect) {
-                Write-Host "  ${gray}Space to toggle, Enter to confirm${nc}"
+                $lines += "  ${gray}Space to toggle, Enter to confirm${nc}"
             }
-            Write-Host ""
-            
+            $lines += ""
+
             for ($i = 0; $i -le $maxIndex; $i++) {
                 $item = $Items[$i]
                 $name = if ($item -is [hashtable]) { $item.Name } else { $item.ToString() }
                 $check = if ($selected[$i]) { "$($script:Icons.Success)" } else { "$($script:Icons.Empty)" }
-                
+
                 if ($i -eq $cursor) {
-                    Write-Host "  ${cyan}> ${check} $name${nc}"
+                    $lines += "  ${cyan}> ${check} $name${nc}"
                 }
                 else {
                     $checkColor = if ($selected[$i]) { $green } else { $gray }
-                    Write-Host "    ${checkColor}${check}${nc} $name"
+                    $lines += "    ${checkColor}${check}${nc} $name"
                 }
             }
-            
-            Write-Host ""
-            Write-Host "  ${gray}j/k or arrows to navigate, space to select, Enter to confirm, q to cancel${nc}"
+
+            $lines += ""
+            $lines += "  ${gray}j/k or arrows to navigate, space to select, Enter to confirm, q to cancel${nc}"
+
+            $frameLines = Write-MenuFrame -Lines $lines -PreviousLineCount $frameLines
             
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
             

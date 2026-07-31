@@ -292,21 +292,23 @@ function Show-AppSelectionMenu {
     # Hide cursor (may fail in non-interactive terminals)
     try { [Console]::CursorVisible = $false } catch { }
 
+    $frameLines = 0
+
     try {
         while ($true) {
-            Clear-Host
-
             # Header
-            Write-Host ""
-            Write-Host "$esc[1;35mSelect Applications to Uninstall$esc[0m"
-            Write-Host ""
-            Write-Host "$esc[90mUse: $($script:Icons.NavUp)$($script:Icons.NavDown) navigate | Space select | Enter confirm | Q quit | / search$esc[0m"
-            Write-Host ""
+            $lines = @(
+                ""
+                "$esc[1;35mSelect Applications to Uninstall$esc[0m"
+                ""
+                "$esc[90mUse: $($script:Icons.NavUp)$($script:Icons.NavDown) navigate | Space select | Enter confirm | Q quit | / search$esc[0m"
+                ""
+            )
 
             # Search indicator
             if ($searchTerm) {
-                Write-Host "$esc[33mSearch:$esc[0m $searchTerm ($($filteredApps.Count) matches)"
-                Write-Host ""
+                $lines += "$esc[33mSearch:$esc[0m $searchTerm ($($filteredApps.Count) matches)"
+                $lines += ""
             }
 
             # Display apps
@@ -320,11 +322,6 @@ function Show-AppSelectionMenu {
                 # Selection indicator
                 $checkbox = if ($isSelected) { "$esc[32m[$($script:Icons.Success)]$esc[0m" } else { "[ ]" }
 
-                # Highlight current
-                if ($isCurrent) {
-                    Write-Host "$esc[7m" -NoNewline  # Reverse video
-                }
-
                 # App info
                 $name = $app.Name
                 if ($name.Length -gt 40) {
@@ -336,18 +333,18 @@ function Show-AppSelectionMenu {
                     $size = "N/A"
                 }
 
-                Write-Host ("  {0} {1,-42} {2,10}" -f $checkbox, $name, $size) -NoNewline
+                $row = "  {0} {1,-42} {2,10}" -f $checkbox, $name, $size
 
                 if ($isCurrent) {
-                    Write-Host "$esc[0m"  # Reset
+                    $lines += "$esc[7m$row$esc[0m"  # Reverse video
                 }
                 else {
-                    Write-Host ""
+                    $lines += $row
                 }
             }
 
             # Footer
-            Write-Host ""
+            $lines += ""
             $selectedCount = $selectedIndices.Count
             if ($selectedCount -gt 0) {
                 $totalSize = 0
@@ -358,13 +355,16 @@ function Show-AppSelectionMenu {
                     }
                 }
                 $totalSizeHuman = Format-ByteSize -Bytes ($totalSize * 1024)
-                Write-Host "$esc[33mSelected:$esc[0m $selectedCount apps ($totalSizeHuman)"
+                $lines += "$esc[33mSelected:$esc[0m $selectedCount apps ($totalSizeHuman)"
             }
 
             # Page indicator
             $totalPages = [Math]::Ceiling($filteredApps.Count / $pageSize)
             $currentPage = [Math]::Floor($pageStart / $pageSize) + 1
-            Write-Host "$esc[90mPage $currentPage of $totalPages$esc[0m"
+            $lines += "$esc[90mPage $currentPage of $totalPages$esc[0m"
+
+            # Render in place over the previous frame
+            $frameLines = Write-MenuFrame -Lines $lines -PreviousLineCount $frameLines
 
             # Handle input
             $key = [Console]::ReadKey($true)
@@ -418,12 +418,14 @@ function Show-AppSelectionMenu {
                     return @()
                 }
                 'Oem2' {  # Forward slash
-                    # Search mode
-                    Write-Host ""
+                    # Search mode - erase the menu frame and prompt in its place
+                    $frameLines = Write-MenuFrame -Lines @() -PreviousLineCount $frameLines
                     Write-Host "Search: " -NoNewline
                     try { [Console]::CursorVisible = $true } catch { }
                     $searchTerm = Read-Host
                     try { [Console]::CursorVisible = $false } catch { }
+                    # Read-Host leaves one prompt line behind; overwrite it next frame
+                    $frameLines = 1
 
                     if ($searchTerm) {
                         $filteredApps = $Apps | Where-Object { $_.Name -like "*$searchTerm*" }

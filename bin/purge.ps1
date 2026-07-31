@@ -329,16 +329,18 @@ function Show-ProjectSelectionMenu {
 
     try { [Console]::CursorVisible = $false } catch { }
 
+    $frameLines = 0
+
     try {
         while ($true) {
-            Clear-Host
-
             # Header
-            Write-Host ""
-            Write-Host "$esc[1;35mSelect Projects to Clean$esc[0m"
-            Write-Host ""
-            Write-Host "$esc[90mUse: $($script:Icons.NavUp)$($script:Icons.NavDown) navigate | Space select | A select all | Enter confirm | Q quit$esc[0m"
-            Write-Host ""
+            $lines = @(
+                ""
+                "$esc[1;35mSelect Projects to Clean$esc[0m"
+                ""
+                "$esc[90mUse: $($script:Icons.NavUp)$($script:Icons.NavDown) navigate | Space select | A select all | Enter confirm | Q quit$esc[0m"
+                ""
+            )
 
             # Display projects
             $pageEnd = [Math]::Min($pageStart + $pageSize, $projectCount)
@@ -350,10 +352,6 @@ function Show-ProjectSelectionMenu {
 
                 $checkbox = if ($isSelected) { "$esc[32m[$($script:Icons.Success)]$esc[0m" } else { "[ ]" }
 
-                if ($isCurrent) {
-                    Write-Host "$esc[7m" -NoNewline
-                }
-
                 $name = $project.Name
                 if ($name.Length -gt 30) {
                     $name = $name.Substring(0, 27) + "..."
@@ -361,18 +359,18 @@ function Show-ProjectSelectionMenu {
 
                 $artifactCount = if ($null -eq $project.Artifacts) { 0 } else { @($project.Artifacts).Count }
 
-                Write-Host ("  {0} {1,-32} {2,10} ({3} items)" -f $checkbox, $name, $project.TotalSizeHuman, $artifactCount) -NoNewline
+                $row = "  {0} {1,-32} {2,10} ({3} items)" -f $checkbox, $name, $project.TotalSizeHuman, $artifactCount
 
                 if ($isCurrent) {
-                    Write-Host "$esc[0m"
+                    $lines += "$esc[7m$row$esc[0m"
                 }
                 else {
-                    Write-Host ""
+                    $lines += $row
                 }
             }
 
             # Footer
-            Write-Host ""
+            $lines += ""
             $selectedCount = $selectedIndices.Count
             if ($selectedCount -gt 0) {
                 $totalSize = 0
@@ -380,13 +378,16 @@ function Show-ProjectSelectionMenu {
                     $totalSize += $Projects[$idx].TotalSizeKB
                 }
                 $totalSizeHuman = Format-ByteSize -Bytes ($totalSize * 1024)
-                Write-Host "$esc[33mSelected:$esc[0m $selectedCount projects ($totalSizeHuman)"
+                $lines += "$esc[33mSelected:$esc[0m $selectedCount projects ($totalSizeHuman)"
             }
 
             # Page indicator
             $totalPages = [Math]::Ceiling($projectCount / $pageSize)
             $currentPage = [Math]::Floor($pageStart / $pageSize) + 1
-            Write-Host "$esc[90mPage $currentPage of $totalPages | Total: $projectCount projects$esc[0m"
+            $lines += "$esc[90mPage $currentPage of $totalPages | Total: $projectCount projects$esc[0m"
+
+            # Render in place over the previous frame
+            $frameLines = Write-MenuFrame -Lines $lines -PreviousLineCount $frameLines
 
             # Handle input
             $key = [Console]::ReadKey($true)

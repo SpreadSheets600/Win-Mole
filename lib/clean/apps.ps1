@@ -35,7 +35,7 @@ function Get-InstalledPrograms {
     foreach ($path in $registryPaths) {
         $items = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue |
                  Where-Object {
-                     $_.PSObject.Properties.Match('DisplayName').Count -gt 0 -and
+                     @($_.PSObject.Properties.Match('DisplayName')).Count -gt 0 -and
                      -not [string]::IsNullOrWhiteSpace($_.DisplayName)
                  } |
                  Select-Object DisplayName, InstallLocation, Publisher
@@ -141,7 +141,7 @@ function Clear-OrphanedAppData {
     
     Start-Section "Orphaned app data"
     
-    $orphaned = Find-OrphanedAppData -DaysOld $DaysOld
+    $orphaned = @(Find-OrphanedAppData -DaysOld $DaysOld)
     
     if ($orphaned.Count -eq 0) {
         Write-Info "No orphaned app data found"
@@ -150,7 +150,7 @@ function Clear-OrphanedAppData {
     }
     
     # Filter by size (only clean if > 10MB to avoid noise)
-    $significantOrphans = $orphaned | Where-Object { $_.Size -gt 10MB }
+    $significantOrphans = @($orphaned | Where-Object { $_.Size -gt 10MB })
     
     if ($significantOrphans.Count -gt 0) {
         $totalSize = ($significantOrphans | Measure-Object -Property Size -Sum).Sum

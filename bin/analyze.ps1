@@ -191,3 +191,6 @@ catch {
     Write-Host ""
     exit 1
 }
+finally {
+    Restore-WinMoleConsoleEncoding
+}

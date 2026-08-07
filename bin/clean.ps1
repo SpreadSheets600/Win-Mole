@@ -424,4 +424,5 @@ try {
 }
 finally {
     Clear-TempFiles
+    Restore-WinMoleConsoleEncoding
 }

@@ -321,4 +321,5 @@ catch {
 }
 finally {
     Clear-TempFiles
+    Restore-WinMoleConsoleEncoding
 }

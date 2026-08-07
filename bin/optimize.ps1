@@ -791,4 +791,9 @@ function Main {
 }
 
 # Run main
-Main
+try {
+    Main
+}
+finally {
+    Restore-WinMoleConsoleEncoding
+}

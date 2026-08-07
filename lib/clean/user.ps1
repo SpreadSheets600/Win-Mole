@@ -1,4 +1,4 @@
-# WinMole - User Cleanup Module
+﻿# WinMole - User Cleanup Module
 # Cleans user-level temporary files, caches, and downloads
 
 #Requires -Version 5.1

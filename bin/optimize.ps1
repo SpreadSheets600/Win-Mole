@@ -1,4 +1,4 @@
-# WinMole - Optimize Command
+﻿# WinMole - Optimize Command
 # System optimization, health checks, and repairs for Windows
 
 #Requires -Version 5.1

@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole - cleanup module tests (lib/clean/*) and dry-run integration tests
 # Run with: Invoke-Pester -Path .\tests\
 

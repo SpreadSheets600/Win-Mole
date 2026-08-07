@@ -1,4 +1,4 @@
-# WinMole - UI Module
+﻿# WinMole - UI Module
 # Provides interactive UI components (menus, confirmations, etc.)
 
 #Requires -Version 5.1

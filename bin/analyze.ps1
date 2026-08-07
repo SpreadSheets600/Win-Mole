@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole - Disk Space Analyzer
 # Wrapper for Go TUI application
 

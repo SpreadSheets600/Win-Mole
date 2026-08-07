@@ -1,4 +1,4 @@
-# WinMole - Common Functions Library
+﻿# WinMole - Common Functions Library
 # Main entry point that loads all core modules
 
 #Requires -Version 5.1

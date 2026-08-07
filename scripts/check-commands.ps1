@@ -1,4 +1,4 @@
-# WinMole - Static command resolution check
+﻿# WinMole - Static command resolution check
 #
 # PowerShell resolves command names at call time, so a call to a function that
 # does not exist, or a call passing a parameter that was never declared, is

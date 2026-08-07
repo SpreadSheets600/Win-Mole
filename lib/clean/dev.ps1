@@ -1,4 +1,4 @@
-# WinMole - Developer Tools Cleanup Module
+﻿# WinMole - Developer Tools Cleanup Module
 # Cleans development tool caches and build artifacts
 
 #Requires -Version 5.1

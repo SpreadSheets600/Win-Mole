@@ -1,4 +1,4 @@
-# WinMole - Safe File Operations Module
+﻿# WinMole - Safe File Operations Module
 # Provides safe file deletion and manipulation functions with protection checks
 
 #Requires -Version 5.1

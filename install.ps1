@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole Installer
 # Installs WinMole to the system and adds to PATH
 
@@ -14,6 +14,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+# Force UTF-8 console output so the banner renders correctly on CJK Windows
+# (PowerShell 5.1 defaults to the ANSI/OEM codepage, e.g. CP949)
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+}
+catch { }
 
 # ============================================================================
 # Configuration

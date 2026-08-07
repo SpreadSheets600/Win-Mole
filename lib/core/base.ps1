@@ -1,4 +1,4 @@
-# WinMole - Base Definitions and Utilities
+﻿# WinMole - Base Definitions and Utilities
 # Core definitions, constants, and basic utility functions used by all modules
 
 #Requires -Version 5.1
@@ -8,6 +8,14 @@ $ErrorActionPreference = "Stop"
 # Prevent multiple sourcing
 if ((Get-Variable -Name 'WINMOLE_BASE_LOADED' -Scope Script -ErrorAction SilentlyContinue) -and $script:WINMOLE_BASE_LOADED) { return }
 $script:WINMOLE_BASE_LOADED = $true
+
+# Force UTF-8 console output so box-drawing/icon characters render correctly
+# on CJK Windows (PowerShell 5.1 defaults to the ANSI/OEM codepage, e.g. CP949)
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+}
+catch { }
 
 # ============================================================================
 # Color Definitions (ANSI escape codes for modern terminals)

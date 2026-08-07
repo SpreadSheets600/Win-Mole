@@ -1,4 +1,4 @@
-# WinMole - Cache Cleanup Module
+﻿# WinMole - Cache Cleanup Module
 # Cleans Windows and application caches
 
 #Requires -Version 5.1

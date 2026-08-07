@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole - core library tests (base.ps1, file_ops.ps1, log.ps1)
 # Run with: Invoke-Pester -Path .\tests\
 

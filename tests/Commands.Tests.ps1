@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole - command entry point tests and repo-wide script validation
 # Run with: Invoke-Pester -Path .\tests\
 

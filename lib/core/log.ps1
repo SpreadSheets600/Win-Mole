@@ -1,4 +1,4 @@
-# WinMole - Logging Module
+﻿# WinMole - Logging Module
 # Provides consistent logging functions with colors and icons
 
 #Requires -Version 5.1

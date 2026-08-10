@@ -1,4 +1,4 @@
-# WinMole - System Cleanup Module
+﻿# WinMole - System Cleanup Module
 # Cleans Windows system files that require administrator access
 
 #Requires -Version 5.1

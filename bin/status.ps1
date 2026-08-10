@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole - System Status Monitor
 # Wrapper for Go TUI application
 
@@ -165,4 +165,7 @@ catch {
     Write-WinMoleError "An error occurred: $_"
     Write-Host ""
     exit 1
+}
+finally {
+    Restore-WinMoleConsoleEncoding
 }

@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole - Windows System Maintenance Toolkit
 # Main CLI entry point
 
@@ -321,4 +321,5 @@ catch {
 }
 finally {
     Clear-TempFiles
+    Restore-WinMoleConsoleEncoding
 }

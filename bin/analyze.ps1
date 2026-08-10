@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole - Disk Space Analyzer
 # Wrapper for Go TUI application
 
@@ -190,4 +190,7 @@ catch {
     Write-Host "  ERROR: An error occurred: $errMsg" -ForegroundColor Red
     Write-Host ""
     exit 1
+}
+finally {
+    Restore-WinMoleConsoleEncoding
 }

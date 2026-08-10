@@ -1,4 +1,4 @@
-# WinMole - Base Definitions and Utilities
+﻿# WinMole - Base Definitions and Utilities
 # Core definitions, constants, and basic utility functions used by all modules
 
 #Requires -Version 5.1
@@ -8,6 +8,37 @@ $ErrorActionPreference = "Stop"
 # Prevent multiple sourcing
 if ((Get-Variable -Name 'WINMOLE_BASE_LOADED' -Scope Script -ErrorAction SilentlyContinue) -and $script:WINMOLE_BASE_LOADED) { return }
 $script:WINMOLE_BASE_LOADED = $true
+
+# Force UTF-8 console output so box-drawing/icon characters render correctly
+# on CJK Windows (PowerShell 5.1 defaults to the ANSI/OEM codepage, e.g. CP949).
+# The previous encodings are saved so entry points can restore them on exit
+# via Restore-WinMoleConsoleEncoding (avoids leaving the process-wide console
+# encoding changed after WinMole returns).
+$script:WinMoleOriginalConsoleOutputEncoding = $null
+$script:WinMoleOriginalOutputEncoding = $null
+try {
+    $script:WinMoleOriginalConsoleOutputEncoding = [Console]::OutputEncoding
+    $script:WinMoleOriginalOutputEncoding = $global:OutputEncoding
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $global:OutputEncoding = [System.Text.Encoding]::UTF8
+}
+catch { }
+
+function Restore-WinMoleConsoleEncoding {
+    <#
+    .SYNOPSIS
+        Restore the console output encoding that was active before WinMole ran.
+    #>
+    try {
+        if ($null -ne $script:WinMoleOriginalConsoleOutputEncoding) {
+            [Console]::OutputEncoding = $script:WinMoleOriginalConsoleOutputEncoding
+        }
+        if ($null -ne $script:WinMoleOriginalOutputEncoding) {
+            $global:OutputEncoding = $script:WinMoleOriginalOutputEncoding
+        }
+    }
+    catch { }
+}
 
 # ============================================================================
 # Color Definitions (ANSI escape codes for modern terminals)

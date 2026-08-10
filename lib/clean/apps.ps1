@@ -1,4 +1,4 @@
-# WinMole - Application-Specific Cleanup Module
+﻿# WinMole - Application-Specific Cleanup Module
 # Cleans leftover data from uninstalled apps and app-specific caches
 
 #Requires -Version 5.1

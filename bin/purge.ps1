@@ -1,4 +1,4 @@
-# WinMole - Purge Command
+﻿# WinMole - Purge Command
 # Aggressive cleanup of project build artifacts
 
 #Requires -Version 5.1
@@ -617,4 +617,9 @@ function Main {
 }
 
 # Run main
-Main
+try {
+    Main
+}
+finally {
+    Restore-WinMoleConsoleEncoding
+}

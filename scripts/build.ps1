@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # WinMole Build Script
 # Builds Go binaries and validates PowerShell scripts
 

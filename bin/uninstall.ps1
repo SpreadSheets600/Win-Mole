@@ -1,4 +1,4 @@
-# WinMole - Uninstall Command
+﻿# WinMole - Uninstall Command
 # Interactive application uninstaller for Windows
 
 #Requires -Version 5.1
@@ -629,4 +629,9 @@ function Main {
 }
 
 # Run main
-Main
+try {
+    Main
+}
+finally {
+    Restore-WinMoleConsoleEncoding
+}

@@ -1,4 +1,4 @@
-# WinMole - Clean Command
+﻿# WinMole - Clean Command
 # Deep cleanup orchestrator for Windows
 
 #Requires -Version 5.1
@@ -424,4 +424,5 @@ try {
 }
 finally {
     Clear-TempFiles
+    Restore-WinMoleConsoleEncoding
 }

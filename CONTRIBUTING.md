@@ -161,13 +161,13 @@ Describe "Remove-SafeItem" {
 
 ## Pull Requests
 
-> **Important:** Please submit PRs to the `main` branch.
+> **Important:** Please submit PRs to the `master` branch (the repository default).
 
-1. Fork and create branch from `main`
+1. Fork and create branch from `master`
 2. Make your changes
 3. Run tests: `Invoke-Pester -Path .\tests\`
 4. Commit with descriptive message
-5. Open PR targeting `main`
+5. Open PR targeting `master`
 
 ### Commit Messages
 
